@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS = { min: 3, max: 5, refresh: 30, sound: false, notify: fa
 const state = {
   page: 'overview', sport: 'nba', mode: 'live', scores: null, markets: null, scoresError: null, marketsError: null, books: {}, selectedGame: null, details: {}, loading: true, lastRefresh: null,
   models: { pregame: null, live: null, error: null }, predictor: null, preds: {}, history: {},
-  legs: safeRead('legs', [{ id: 1, label: 'Hypothetical selection A', p: .60, multiplier: 1.50 }, { id: 2, label: 'Hypothetical selection B', p: .50, multiplier: 2.10 }]),
+  legs: safeRead('legs', []).filter(l => !/^Hypothetical selection/.test(l.label)),
   journal: safeRead('journal', []), links: safeRead('links', {}), autoLinks: {}, caughtUpFor: null, predLog: safeRead('predlog', {}),
   settings: { ...DEFAULT_SETTINGS, ...safeRead('settings', {}) }, alerts: [], alertSeen: new Map(), playerTeam: null, playerQuery: '', propGame: null, propStat: 'points', injuries: null, eventDetail: {}, propBooks: {}, propFilter: false, push: { state: 'unknown' }, scanStatus: null, online: navigator.onLine,
 };
@@ -86,7 +86,8 @@ function predictAll() {
 /** Prospective out-of-sample log: freeze the pregame forecast before tip, score it after the final. */
 function logProspective(g, r) {
   const k = g.id, rec = state.predLog[k];
-  if (!rec && g.status === 'pre' && r.pregame.available) {
+  if (g.status === 'pre' && r.pregame.available && (!rec || rec.outcome === null)) {
+    if (rec && Math.abs(rec.p - r.pregame.homeProbability) < 0.0005) return; // unchanged
     state.predLog[k] = { gameId: k, date: g.startTime, home: g.home.abbr, away: g.away.abbr, p: r.pregame.homeProbability, model: r.pregameModel, loggedAt: new Date().toISOString(), outcome: null };
     save('predlog', state.predLog);
   } else if (rec && rec.outcome === null && g.status === 'post' && Number.isFinite(g.home.score) && Number.isFinite(g.away.score) && g.home.score !== g.away.score) {
@@ -148,7 +149,7 @@ function renderOverview() {
   const pv = state.models.pregame?.validation, lv = state.models.live?.validation;
   const f = findings();
   const gate = (n, label, status, cls) => `<div class="reason"><span class="tick">${n}</span><span class="grow">${label}</span><span class="badge ${cls}">${status}</span></div>`;
-  return `<div class="stats-grid">${statCard('LIVE NOW', state.loading ? '…' : live, isDemo() ? 'Demo games' : `${games.length} games today`, live ? 'green' : '', '◉')}${statCard('POLYMARKET MARKETS', state.loading ? '…' : marketCount, isDemo() ? 'Made-up sample markets' : 'Open to look at, not bets', '', '▥')}${statCard('MODEL', 'v1', pv ? `Checked on ${pv.n.toLocaleString()} past games` : 'Model files not loaded', '', '◇')}${statCard('AUTO-TRADING', 'OFF', 'You place every trade yourself', 'orange', '⊘')}</div>
+  return `<div class="stats-grid">${statCard('LIVE NOW', state.loading ? '…' : live, isDemo() ? 'Demo games' : `${games.filter(g => g.startTime && etISO(0) === new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(g.startTime))).length} games today`, live ? 'green' : '', '◉')}${statCard('POLYMARKET MARKETS', state.loading ? '…' : marketCount, isDemo() ? 'Made-up sample markets' : 'Open to look at, not bets', '', '▥')}${statCard('MODEL', 'v1', pv ? `Checked on ${pv.n.toLocaleString()} past games` : 'Model files not loaded', '', '◇')}${statCard('AUTO-TRADING', 'OFF', 'You place every trade yourself', 'orange', '⊘')}</div>
     ${help(['Each card is one game. The green or orange tag shows <b>which team we think wins and how likely</b>, e.g. "BOS 64% to win".', 'These chances come from our own models, not from Polymarket prices.', '<b>Model findings</b> points out games worth a closer look. They are not bets.', '<b>Before real-money use</b> is the checklist the app must pass before it will ever flag a bet.'])}${sectionHeader('Tonight’s games', 'Tap a game to see the full breakdown.', `<button class="sm-btn" data-page="live">All games ↗</button>`)}
     <div class="panel-layout"><div class="panel"><div class="panel-head"><div><div class="panel-title">${esc(state.sport.toUpperCase())} game center</div><span class="panel-sub">${isDemo() ? 'Demo games' : `Scores from ESPN · updated ${esc(ago(state.scores?.fetchedAt))}`}</span></div><span class="badge">${isDemo() ? 'DEMO' : 'LIVE DATA'}</span></div><div class="panel-pad">${state.sport === 'nba' ? gamesPanel() : emptyBlock(`${state.sport.toUpperCase()} model not built yet`, 'NBA is the priority. NFL and MLB get their own models (drives/clock, pitchers/bullpens) in later phases. Scores still load in Live games.')}</div></div>
       <div class="stack"><div class="signal-box"><div class="signal-icon">◈</div><h3>Model findings</h3>${f.length ? f.map(x => `<button class="finding" data-game="${esc(x.g.id)}">${esc(x.text)}</button>`).join('') : `<p>Nothing notable right now. This lists games where a losing team still has a real chance, a game has swung a lot, or a matchup is close to 50/50.</p>`}<div class="line"></div><div class="badge orange">FOR RESEARCH, NOT BETS</div></div>
@@ -156,9 +157,9 @@ function renderOverview() {
         ${gate('01', 'Tested on past seasons', pv && lv ? 'DONE' : 'MISSING', pv && lv ? 'green' : 'red')}
         ${gate('02', 'Chances match real results', pv && lv ? 'DONE' : 'MISSING', pv && lv ? 'green' : 'red')}
         ${gate('03', 'Real prices, incl. fees', 'FEES NOT CHECKED', 'orange')}
-        ${gate('04', 'Markets matched to games', 'YOU DO IT BY HAND', 'orange')}
+        ${gate('04', 'Markets matched to games', 'AUTOMATIC', 'green')}
         ${gate('05', 'Proven in paper trading', 'NOT STARTED', 'red')}
-        ${gate('06', 'Injury reports connected', 'NOT YET', 'red')}
+        ${gate('06', 'Injury reports connected', state.injuries ? 'CONNECTED' : 'LOADING', state.injuries ? 'green' : 'orange')}
       </div></div></div></div>
     ${sectionHeader('Polymarket markets', 'What is listed right now. Tap "Check price" to see the real price.', `<button class="sm-btn" data-page="opportunities">Compare with our picks ↗</button>`)}
     <div class="panel panel-pad">${marketRows(4)}</div>`;
@@ -244,7 +245,7 @@ function propTable(abbr, side, stat, pmIndex) {
     ${side.out.length ? `<p class="muted small-note">Ruled out: ${esc(side.out.map(c => c.name).join(', '))}</p>` : ''}`;
 }
 function bestSpots(g, pr, detail) {
-  if (!detail?.props?.length) return [];
+  if (!detail?.props?.length) return { good: [], suspect: [] };
   const cards = new Map([...pr.home.active, ...pr.away.active].map(c => [normName(c.name), c]));
   const out = [];
   for (const pp of detail.props) {
@@ -254,8 +255,10 @@ function bestSpots(g, pr, detail) {
     if (pp.ask && pp.ask > 0.02 && pp.ask < 0.97) out.push({ pp, c, side: 'Yes', ours: p, price: pp.ask, diff: p - pp.ask });
     if (pp.bid && pp.bid > 0.03 && pp.bid < 0.98) out.push({ pp, c, side: 'No', ours: 1 - p, price: 1 - pp.bid, diff: (1 - p) - (1 - pp.bid) });
   }
+  for (const x of out) x.suspect = x.diff > 0.2 ? 'Gap over 20 points: likely something we are missing' : x.c.games < 15 ? `Only ${x.c.games} games of history for this player` : null;
   const f = state.propFilter ? out.filter(x => 1 / x.price >= state.settings.min && 1 / x.price <= state.settings.max) : out;
-  return f.sort((a, b) => b.diff - a.diff).slice(0, 10);
+  const sorted = f.sort((a, b) => b.diff - a.diff);
+  return { good: sorted.filter(x => !x.suspect && x.diff > 0).slice(0, 10), suspect: sorted.filter(x => x.suspect && x.diff > 0).slice(0, 8) };
 }
 function spotRow(x, detail) {
   const bk = state.propBooks[x.pp.slug], s = state.settings;
@@ -270,7 +273,8 @@ function spotRow(x, detail) {
       gates: { maxQuoteAgeSec: s.maxQuoteAge, minNetEV: s.minEV / 100, minGrossMultiple: s.min, maxGrossMultiple: s.max, maxSlippage: s.maxSlippageC / 100, edgeMustExceedUncertainty: true } });
     check = `<span><strong>${fill.ok ? `${(fill.avgPrice * 100).toFixed(1)}¢ live` : esc(fill.reason)}</strong> · <span class="badge ${ev.actionable ? 'green' : 'red'}">${ev.actionable ? 'WORTH A LOOK' : 'NOT A BET'}</span></span>${ev.blockers.length ? `<details class="drill"><summary>Why not</summary><ul class="blockers">${ev.blockers.map(b => `<li>${esc(b)}</li>`).join('')}</ul></details>` : ''}`;
   }
-  return `<div class="data-row spot"><div><strong>${esc(x.c.name)} ${x.side === 'Yes' ? `${x.pp.line}+` : `under ${x.pp.line}`} ${esc(STAT_LABEL[x.pp.stat].toLowerCase())}</strong><small>Our chance ${pct(x.ours, 0)} · Polymarket ${Math.round(x.price * 100)}¢ (listing) · pays ${(1 / x.price).toFixed(2)}× · difference <b class="${x.diff > 0 ? 'good-text' : ''}">${x.diff > 0 ? '+' : ''}${Math.round(x.diff * 100)} pts</b></small></div><div class="row-actions">${check}</div></div>`;
+  const leg = `<button class="sm-btn" data-add-leg="${esc(JSON.stringify({ label: `${x.c.name} ${x.side === 'Yes' ? `${x.pp.line}+` : `under ${x.pp.line}`} ${STAT_LABEL[x.pp.stat].toLowerCase()}`, p: +x.ours.toFixed(4), multiplier: +(1 / x.price).toFixed(3) }))}">+ Parlay</button>`;
+  return `<div class="data-row spot"><div><strong>${esc(x.c.name)} ${x.side === 'Yes' ? `${x.pp.line}+` : `under ${x.pp.line}`} ${esc(STAT_LABEL[x.pp.stat].toLowerCase())}</strong><small>Our chance ${pct(x.ours, 0)} · Polymarket ${Math.round(x.price * 100)}¢ (listing) · pays ${(1 / x.price).toFixed(2)}× · difference <b class="${x.diff > 0 ? 'good-text' : ''}">${x.diff > 0 ? '+' : ''}${Math.round(x.diff * 100)} pts</b>${x.suspect ? `<br><span class="warn-note">⚠ ${esc(x.suspect)}</span>` : ''}</small></div><div class="row-actions">${check}${leg}</div></div>`;
 }
 function renderPlayers() {
   const pm = state.models.props;
@@ -289,7 +293,8 @@ function renderPlayers() {
     body = `<div class="two-up">${['away', 'home'].map(side => `<div class="panel"><div class="panel-head"><div class="panel-title">${esc(g[side].name)}</div><span class="badge">${side === 'home' ? 'HOME' : 'AWAY'}</span></div><div class="panel-pad">${propTable(g[side].abbr, pr[side], stat, pmIndex)}</div></div>`).join('')}</div>`;
     const list = bestSpots(g, pr, detail);
     spots = `${sectionHeader('Biggest disagreements with Polymarket', slug ? (detail?.loading ? 'Loading Polymarket props…' : detail?.error ? `Polymarket props unavailable: ${esc(detail.error)}` : `${detail?.props?.length || 0} Polymarket props for this game.`) : 'Polymarket has not listed this game yet.', `<button class="sm-btn ${state.propFilter ? 'active-filter' : ''}" data-prop-filter="1">${state.propFilter ? `Showing ${state.settings.min}×–${state.settings.max}× only` : `Only ${state.settings.min}×–${state.settings.max}× payouts`}</button>`)}
-      <div class="panel panel-pad">${list.length ? `<div class="data-list">${list.map(x => spotRow(x, detail)).join('')}</div><p class="muted small-note">Listing prices can lag. "Check live price" pulls the real order book and runs every safety check. Ranked by how much more likely we think it is than the price says.</p>` : '<p class="muted">Nothing to compare yet.</p>'}</div>`;
+      <div class="panel panel-pad">${list.good.length ? `<div class="data-list">${list.good.map(x => spotRow(x, detail)).join('')}</div><p class="muted small-note">Listing prices can lag. "Check live price" pulls the real order book and runs every safety check. Ranked by how much more likely we think it is than the price says.</p>` : '<p class="muted">No believable disagreements right now.</p>'}</div>
+      ${list.suspect.length ? `<details class="panel panel-pad drill suspect"><summary>Too good to be true (${list.suspect.length}) · probably missing info, not value</summary><p class="muted small-note">When we disagree with the market by 20+ points, or know little about a player, the usual reason is news we don't have yet: a role change, minutes limit, trade or injury. Treat these as things to research, not bets.</p><div class="data-list">${list.suspect.map(x => spotRow(x, detail)).join('')}</div></details>` : ''}`;
   }
   const injNote = state.injuries ? `Injury report loaded ${esc(ago(state.injuries.fetchedAt))}: players ruled out are removed; day-to-day players are tagged.` : 'Injury report not loaded yet.';
   return `${sectionHeader('Player props', `Our projection and chance of each line, next to Polymarket's price. Player numbers through ${esc(pm.asOfDate)}.`)}${help(['Pick a game and a stat. <b>PROJ.</b> is the number we expect. <b>10+, 15+…</b> is our chance he reaches that line. <b>PM 54¢</b> under it is Polymarket\'s price for the same line.', '<b>Biggest disagreements</b> lists the lines where our chance is furthest above Polymarket\'s price. Use the button to show only 3×–5× payouts.', '<b>MIN</b> is his recent minutes. Players ruled out are removed automatically. We do not yet bump teammates\' minutes when someone sits.', `Checked on ${v.n.toLocaleString()} past player-games: more accurate than the usual "hit in X of his last 10" stat.`])}
@@ -334,6 +339,8 @@ function sideResult(label, abbr, p, pLow, fill, b, srcKind, feeCoef = null) {
     <div class="result-line"><span>If it wins, ${dollar(s.stake)} pays back</span><strong>${fill.ok ? `${dollar(s.stake / fill.avgPrice)} (${(1 / fill.avgPrice).toFixed(2)}×)` : '—'}</strong></div>
     <div class="result-line"><span>Expected profit after est. fees</span><strong class="${ev.netEV > 0 ? 'good-text' : ''}">${ev.netEV !== null ? pct(ev.netEV) : '—'}</strong></div>
     <div class="result-line"><span>Verdict</span><span class="badge ${ev.actionable ? 'green' : 'red'}">${ev.actionable ? 'WORTH A LOOK' : 'NOT A BET'}</span></div>
+    ${edge !== null && Math.abs(edge) >= 0.12 ? `<p class="warn-note">Big gap. The market often knows something we don't (injuries, rest, lineup news). Check the news before trusting this.</p>` : ''}
+    ${fill.ok && Number.isFinite(p) ? `<button class="sm-btn" data-add-leg="${esc(JSON.stringify({ label: `${abbr} to win`, p: +p.toFixed(4), multiplier: +(1 / fill.avgPrice).toFixed(3) }))}">+ Add to parlay</button>` : ''}
     ${ev.blockers.length ? `<details class="drill"><summary>Why not (${ev.blockers.length})</summary><ul class="blockers">${ev.blockers.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}</div>`;
   return { ev, html };
 }
@@ -375,7 +382,7 @@ function renderOpportunities() {
 function renderParlays() {
   let result = null; try { result = calculateIndependentParlay(state.legs); } catch { }
   return `${sectionHeader('Parlay calculator', 'Try out parlay ideas with your own numbers.', `<span class="badge">CALCULATOR</span>`)}${help(['Add each pick with <b>your chance it wins</b> and <b>what it pays</b> (2× means $5 pays back $10).', 'The calculator shows what the whole parlay pays and its chance to hit.', 'Warning: picks from the same game often win or lose together, so the real chance can be quite different from what this shows.'])}
-  <div class="two-up"><div class="panel"><div class="panel-head"><div class="panel-title">Your picks <span class="panel-sub">Use your own numbers</span></div><span class="badge">${state.legs.length} PICKS</span></div><div class="panel-pad"><div class="data-list">${state.legs.map((l, i) => `<div class="data-row"><div style="flex:1"><strong>${esc(l.label)}</strong><small>Pick ${i + 1}</small></div><div class="row-actions"><span class="tag">${pct(l.p)} chance</span><span class="tag">pays ${l.multiplier.toFixed(2)}×</span><button class="sm-btn" data-remove-leg="${l.id}" aria-label="Remove pick ${i + 1}">×</button></div></div>`).join('')}</div>
+  <div class="two-up"><div class="panel"><div class="panel-head"><div class="panel-title">Your picks <span class="panel-sub">Use your own numbers</span></div><span class="badge">${state.legs.length} PICKS</span></div><div class="panel-pad">${state.legs.length ? '' : '<p class="muted">No picks yet. Tap "+ Parlay" on Player props or "+ Add to parlay" on Compare prices, or add one by hand below.</p>'}<div class="data-list">${state.legs.map((l, i) => `<div class="data-row"><div style="flex:1"><strong>${esc(l.label)}</strong><small>Pick ${i + 1}</small></div><div class="row-actions"><span class="tag">${pct(l.p)} chance</span><span class="tag">pays ${l.multiplier.toFixed(2)}×</span><button class="sm-btn" data-remove-leg="${l.id}" aria-label="Remove pick ${i + 1}">×</button></div></div>`).join('')}</div>
     <form id="addLegForm" class="form-grid" style="margin-top:16px"><div class="field"><label for="legLabel">Pick</label><input id="legLabel" name="label" required placeholder="e.g. Team A moneyline" maxlength="80" /></div><div class="field"><label for="legP">Your chance it wins (%)</label><input id="legP" name="p" type="number" required min="1" max="99" step="0.1" placeholder="e.g. 62" /></div><div class="field"><label for="legMult">Pays (×)</label><input id="legMult" name="multiplier" type="number" required min="1.01" max="100" step="0.01" placeholder="e.g. 1.8" /></div><div class="field" style="align-self:end"><button type="submit" class="primary-btn">Add pick +</button></div></form></div></div>
     <div class="stack"><div class="panel"><div class="panel-head"><div class="panel-title">Result</div><span class="badge orange">ESTIMATE</span></div><div class="panel-pad">${result ? `<div class="stat-title">PARLAY PAYS</div><div class="big-number orange-text">${result.grossMultiplier.toFixed(2)}×</div><div class="line"></div><div class="result-line"><span>Chance all picks hit</span><strong>${pct(result.jointP, 2)}</strong></div><div class="result-line"><span>Expected profit before fees</span><strong class="${result.grossEV >= 0 ? 'good-text' : 'error-text'}">${pct(result.grossEV)}</strong></div><div class="result-line"><span>${dollar(state.settings.stake)} pays back if it hits</span><strong>${dollar(state.settings.stake * result.grossMultiplier)}</strong></div><div class="result-line"><span>In your ${state.settings.min}×–${state.settings.max}× target?</span><span class="badge ${result.grossMultiplier >= state.settings.min && result.grossMultiplier <= state.settings.max ? 'green' : 'orange'}">${result.grossMultiplier >= state.settings.min && result.grossMultiplier <= state.settings.max ? 'YES' : 'NO'}</span></div>` : 'Add at least two picks.'}
       <div class="notice warn" style="margin-top:15px"><strong>Don't bet from this alone.</strong> It assumes your picks don't affect each other. Same-game picks usually do. Also, this app can't see Polymarket's real parlay (Combo) prices.</div></div></div>
@@ -604,7 +611,12 @@ async function notificationTest() {
   catch { toast('Notification test unavailable in this browser context.'); }
 }
 function handleClick(e) {
-  const el = e.target.closest('[data-push],[data-prop-check],[data-prop-filter],[data-props-for],[data-prop-stat],[data-page],[data-sport],[data-mode],[data-game],[data-book],[data-load-game],[data-remove-leg],[data-test-notification],[data-export],[data-settle],[data-toggle]'); if (!el) return;
+  const el = e.target.closest('[data-add-leg],[data-push],[data-prop-check],[data-prop-filter],[data-props-for],[data-prop-stat],[data-page],[data-sport],[data-mode],[data-game],[data-book],[data-load-game],[data-remove-leg],[data-test-notification],[data-export],[data-settle],[data-toggle]'); if (!el) return;
+  if (el.dataset.addLeg) {
+    try { const l = JSON.parse(el.dataset.addLeg); if (!(l.p > 0 && l.p < 1 && l.multiplier > 1)) throw 0; if (state.legs.length >= 20) return toast('Parlay is full (20 picks).');
+      state.legs.push({ id: Date.now(), label: String(l.label).slice(0, 80), p: l.p, multiplier: l.multiplier }); save('legs', state.legs); toast(`Added to parlay (${state.legs.length} picks).`); render(); } catch { toast('Could not add that pick.'); }
+    return;
+  }
   if (el.dataset.push) { pushAction(el.dataset.push); return; }
   if (el.dataset.propFilter) { state.propFilter = !state.propFilter; render(); return; }
   if (el.dataset.propCheck) { checkPropPrice(el.dataset.propCheck); return; }

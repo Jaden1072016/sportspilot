@@ -1,4 +1,4 @@
-const VERSION = 'sportspilot-shell-v0.4.0';
+const VERSION = 'sportspilot-shell-v0.5.0';
 // App shell + model files only. Scores, prices and every /api/ response are NEVER cached,
 // so an offline app can never show an old price as if it were current.
 const STATIC = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/assets/icon-192.png', '/assets/icon-512.png',
