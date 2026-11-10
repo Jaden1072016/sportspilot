@@ -2,7 +2,8 @@ import { createPredictor } from './lib/nba/predict.mjs';
 import { calculateIndependentParlay, evaluateOpportunity } from './lib/value.mjs';
 import { brier, logLoss } from './lib/stats.mjs';
 import { executableFill } from './lib/market.mjs';
-const PAGE_NAMES = { overview: 'Dashboard', live: 'Live games', players: 'Players', opportunities: 'Compare with Polymarket', parlays: 'Parlay calculator', performance: 'Results', settings: 'Alerts & settings' };
+import { projectPlayer, PROP_STATS, STAT_LABEL } from './lib/nba/props.mjs';
+const PAGE_NAMES = { overview: 'Dashboard', live: 'Games', players: 'Player props', opportunities: 'Compare with Polymarket', parlays: 'Parlay calculator', performance: 'Results', settings: 'Alerts & settings' };
 const DEMO_GAMES = [
   { id: '700001', league: 'nba', name: 'Metro Comets at Harbor Waves', status: 'in', statusName: 'STATUS_IN_PROGRESS', statusText: 'Q3 · 06:00', period: 3, clock: '6:00', clockSeconds: 360, startTime: null, home: { id: 'demo-h1', name: 'Harbor Waves', abbr: 'HWV', score: 91, record: { wins: 31, losses: 19, pct: .62 } }, away: { id: 'demo-a1', name: 'Metro Comets', abbr: 'MCO', score: 85, record: { wins: 27, losses: 23, pct: .54 } }, demoPrior: { expMargin48: 2.5, pace: 99, expTotal48: 226 } },
   { id: '700002', league: 'nba', name: 'Summit Foxes at Valley Heat', status: 'in', statusName: 'STATUS_IN_PROGRESS', statusText: 'Q2 · 03:24', period: 2, clock: '3:24', clockSeconds: 204, startTime: null, home: { id: 'demo-h2', name: 'Valley Heat', abbr: 'VHT', score: 54, record: { wins: 23, losses: 27, pct: .46 } }, away: { id: 'demo-a2', name: 'Summit Foxes', abbr: 'SFX', score: 49, record: { wins: 38, losses: 12, pct: .76 } }, demoPrior: { expMargin48: -6, pace: 100, expTotal48: 228 } },
@@ -22,7 +23,7 @@ const state = {
   models: { pregame: null, live: null, error: null }, predictor: null, preds: {}, history: {},
   legs: safeRead('legs', [{ id: 1, label: 'Hypothetical selection A', p: .60, multiplier: 1.50 }, { id: 2, label: 'Hypothetical selection B', p: .50, multiplier: 2.10 }]),
   journal: safeRead('journal', []), links: safeRead('links', {}), autoLinks: {}, caughtUpFor: null, predLog: safeRead('predlog', {}),
-  settings: { ...DEFAULT_SETTINGS, ...safeRead('settings', {}) }, alerts: [], alertSeen: new Map(), playerTeam: null, playerQuery: '', online: navigator.onLine,
+  settings: { ...DEFAULT_SETTINGS, ...safeRead('settings', {}) }, alerts: [], alertSeen: new Map(), playerTeam: null, playerQuery: '', propGame: null, propStat: 'points', online: navigator.onLine,
 };
 let toastTimer = null;
 function toast(message) { const t = $('toast'); t.textContent = message; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 4200); }
@@ -61,7 +62,8 @@ const nbaTeams = () => (state.models.pregame?.ratings.teams || []).filter(t => t
 async function loadModels() {
   try {
     const [p, l] = await Promise.all(['/models/nba-pregame.json', '/models/nba-live.json'].map(u => fetch(u, { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error(`${u} HTTP ${r.status}`); return r.json(); })));
-    state.models = { pregame: p, live: l, error: null };
+    state.models = { pregame: p, live: l, props: null, error: null };
+    fetch('/models/nba-props.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null).then(j => { state.models.props = j; render(); }).catch(() => { });
     state.predictor = createPredictor(p, l);
   } catch (e) { state.models.error = e.message; }
 }
@@ -203,7 +205,7 @@ function modelPanel(g) {
   return `<div class="panel-layout"><div class="panel"><div class="panel-head"><div><strong>${esc(g.name || `${g.away.name} at ${g.home.name}`)}</strong><span class="panel-sub">${statusBadge(g.status)} ${esc(g.statusText || '')} · ${stamp}</span></div><span class="badge ${L.available ? 'green' : 'orange'}">${L.available ? 'LIVE PICK' : 'WAITING'}</span></div><div class="panel-pad">
       <div class="score-visual"><div><div class="score-num">${g.away.score ?? '—'}</div><div class="score-team">${esc(g.away.name)}</div></div><span class="score-vs">AT</span><div><div class="score-num">${g.home.score ?? '—'}</div><div class="score-team">${esc(g.home.name)}</div></div></div><div class="line"></div>${livePart}</div></div>
     <div class="panel"><div class="panel-head"><div class="panel-title">Before the game</div><span class="badge">PREGAME PICK</span></div><div class="panel-pad">${r.pregame.synthetic ? `<div class="notice warn"><strong>Demo game.</strong> Made-up teams have no real history, so this part is blank.</div>` : pregameBlock(g, r)}</div></div></div>
-  ${sectionHeader('Box score', 'Player stats so far from ESPN. These are what happened, not predictions.', `<button class="sm-btn" data-load-game="${esc(g.id)}" ${isDemo() ? 'disabled' : ''}>Load box score ↻</button>`)}<div class="panel panel-pad">${playerTable}</div>`;
+  ${g.status !== 'post' && g.league === 'nba' ? `<div style="margin-top:14px"><button class="sm-btn" data-props-for="${esc(g.id)}">See player props for this game ↗</button></div>` : ''}${sectionHeader('Box score', 'Player stats so far from ESPN. These are what happened, not predictions.', `<button class="sm-btn" data-load-game="${esc(g.id)}" ${isDemo() ? 'disabled' : ''}>Load box score ↻</button>`)}<div class="panel panel-pad">${playerTable}</div>`;
 }
 function renderLive() {
   const games = currentGames();
@@ -211,23 +213,41 @@ function renderLive() {
   return `${sectionHeader('Games', 'Tonight and tomorrow. Tap any game for our pick and why.')}${help(['<b>Chance to win right now</b>: how likely each team is to win from here, based on the score, time left and how good each team is.', '<b>Likely range</b>: our best guess is not exact. The real chance is probably inside this range.', '<b>Why</b>: the main reasons behind the number, in plain words.', '<b>Before the game</b>: what we thought before tip-off. Compare it with the live number to see how much the game has changed.', '<b>What the model can\'t see</b>: things it doesn\'t know yet (like foul trouble). Keep these in mind yourself.'])}<div class="panel panel-pad">${gamesPanel(30)}</div>${sectionHeader('Game breakdown', 'Our pick, the reasons, and what we can\'t see.')}${modelPanel(chosen)}`;
 }
 
+function propsForGame(g) {
+  const pm = state.models.props, rt = state.models.pregame?.ratings;
+  if (!pm || !rt) return null;
+  const team = id => rt.teams.find(t => t.id === Number(id));
+  const pre = predOf(g)?.pregame?.pre;
+  const pace = pre ? pre.expPace / rt.leaguePace : 1;
+  const side = (teamId, oppId) => {
+    const opp = team(oppId);
+    const ctx = { paceFactor: pace, oppDefFactor: opp ? (rt.leagueOrtg + opp.def) / rt.leagueOrtg : 1 };
+    return pm.players.filter(p => p.teamId === Number(teamId)).map(p => projectPlayer(p, ctx, pm.dispersion)).sort((a, b) => b.minutes - a.minutes);
+  };
+  return { home: side(g.home.id, g.away.id), away: side(g.away.id, g.home.id) };
+}
+function propTable(abbr, list, stat) {
+  const lines = state.models.props.ladders[stat];
+  if (!list.length) return `<p class="muted">No recent player data for ${esc(abbr)}.</p>`;
+  return `<div class="table-wrap"><table class="table compact props"><thead><tr><th>${esc(abbr)}</th><th>MIN</th><th>PROJ.</th>${lines.map(k => `<th>${k}+</th>`).join('')}</tr></thead><tbody>${list.map(p => { const st = p.stats[stat]; return `<tr><td><strong>${esc(p.name)}</strong></td><td class="num">${p.minutes.toFixed(0)}</td><td class="num"><strong>${st.mean.toFixed(1)}</strong></td>${st.ladder.map(x => `<td class="num ${x.p >= 0.6 ? 'good-text' : x.p < 0.15 ? 'muted' : ''}">${Math.round(x.p * 100)}%</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>`;
+}
 function renderPlayers() {
-  const pm = state.models.pregame;
-  if (!pm) return emptyBlock('Model files not loaded', state.models.error || 'Loading…');
-  const teams = nbaTeams();
-  const sel = state.playerTeam ?? teams[0]?.id;
-  const q = state.playerQuery.trim().toLowerCase();
-  const all = Object.entries(pm.rotations).filter(([tid]) => +tid >= 1 && +tid <= 30).flatMap(([tid, list]) => list.map(p => ({ ...p, teamId: +tid, team: teams.find(t => t.id === +tid)?.abbr || '?' })));
-  const shown = q ? all.filter(p => p.name.toLowerCase().includes(q)).slice(0, 40) : all.filter(p => p.teamId === sel);
-  const teamTotal = id => all.filter(p => p.teamId === id).reduce((s, p) => s + p.value, 0);
-  const t = teams.find(x => x.id === sel);
-  const teamCard = t && !q ? `<div class="stats-grid">${statCard('STRENGTH', `${t.r >= 0 ? '+' : ''}${t.r.toFixed(1)}`, 'Points per game vs an average team', t.r >= 0 ? 'green' : 'orange', '◇')}${statCard('OFFENSE', `${t.off >= 0 ? '+' : ''}${t.off.toFixed(1)}`, 'Scoring vs average (higher is better)', '', '↗')}${statCard('DEFENSE', `${t.def >= 0 ? '+' : ''}${t.def.toFixed(1)}`, 'Points allowed vs average (lower is better)', t.def <= 0 ? 'green' : 'orange', '⛉')}${statCard('GAMES PLAYED', t.seasonGames, `This season, through ${esc(t.lastDate)}`, '', '▤')}</div>` : '';
-  return `${sectionHeader('Players', `Who matters most on each team. Updated through ${esc(pm.ratings.asOfDate)}.`, `<span class="badge orange">PROP PICKS COMING LATER</span>`)}${help(['Pick a team, or search a player.', '<b>Minutes</b>: how much he has been playing lately.', '<b>Impact per minute</b>: how productive he is when on the court (from his box score stats).', '<b>Team value</b>: minutes and impact combined. A bigger bar means the team misses him more if he sits.', 'Team cards at the top: <b>Strength</b> is points per game better or worse than an average team.'])}
-    <div class="control-row"><div class="field grow"><label for="teamSelect">Team</label><select id="teamSelect" data-player-team>${teams.map(x => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${esc(x.abbr)}</option>`).join('')}</select></div><div class="field grow"><label for="playerSearch">Search a player</label><input id="playerSearch" data-player-search placeholder="Player name" value="${esc(state.playerQuery)}" maxlength="40" /></div></div>
-    ${teamCard}
-    <div class="panel panel-pad" style="margin-top:14px"><div class="table-wrap"><table class="table"><thead><tr><th>PLAYER</th><th>TEAM</th><th>MINUTES</th><th>IMPACT / MIN</th><th>TEAM VALUE</th><th>HOW MUCH THEY MATTER</th></tr></thead><tbody>${shown.length ? shown.map(p => `<tr><td><strong>${esc(p.name)}</strong></td><td>${esc(p.team)}</td><td class="num">${p.ewMin.toFixed(1)}</td><td class="num">${p.gsPerMin.toFixed(3)}</td><td class="num">${p.value.toFixed(2)}</td><td><div class="mini-bar"><span style="width:${Math.min(100, 100 * p.value / Math.max(1e-9, teamTotal(p.teamId))).toFixed(0)}%"></span></div></td></tr>`).join('') : `<tr><td colspan="6">No players found.</td></tr>`}</tbody></table></div>
-    <p class="muted small-note">Recent games count more. Impact is based on box score stats, so great defenders can look underrated here.</p></div>
-    <div class="notice warn" style="margin-top:14px"><strong>Coming later:</strong> player prop chances (like "will he score 20+?"). We won't show any until they're built and tested.</div>`;
+  const pm = state.models.props;
+  if (!state.models.pregame) return emptyBlock('Loading…', state.models.error || 'Loading model files.');
+  if (!pm) return emptyBlock('Loading player projections…', 'One moment.');
+  const games = currentGames().filter(g => g.league === 'nba' && g.status !== 'post');
+  const g = games.find(x => x.id === state.propGame) || games[0];
+  const stat = state.propStat;
+  const v = pm.validation.summary[stat];
+  const stale = Math.round((Date.now() - Date.parse(pm.asOfDate)) / 86400000);
+  const body = g ? (() => { const pr = propsForGame(g); return `<div class="two-up">${['away', 'home'].map(side => `<div class="panel"><div class="panel-head"><div class="panel-title">${esc(g[side].name)}</div><span class="badge">${side === 'home' ? 'HOME' : 'AWAY'}</span></div><div class="panel-pad">${propTable(g[side].abbr, pr[side], stat)}</div></div>`).join('')}</div>`; })()
+    : emptyBlock('No upcoming games loaded', 'Games for today and tomorrow appear here once ESPN lists them.');
+  return `${sectionHeader('Player props', `Our projection and chance of each line for every rotation player. Player numbers through ${esc(pm.asOfDate)}.`)}${help(['Pick a game and a stat. <b>PROJ.</b> is the number we expect. <b>10+, 15+…</b> is our chance he reaches that line.', '<b>MIN</b> is the minutes he has been playing lately. If he plays a lot less (injury, blowout), the chances drop.', 'Green = 60% or better. Faded = under 15%.', `Checked on ${v.n.toLocaleString()} past player-games: these chances were more accurate than the usual "hit in X of his last 10" stat.`])}
+    <div class="control-row"><div class="field grow"><label for="propGame">Game</label><select id="propGame" data-prop-game>${games.map(x => `<option value="${esc(x.id)}" ${g && x.id === g.id ? 'selected' : ''}>${esc(x.away.abbr)} at ${esc(x.home.abbr)} · ${x.status === 'in' ? 'LIVE' : new Date(x.startTime).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</option>`).join('')}</select></div>
+    <div class="field grow"><label>Stat</label><div class="segmented">${PROP_STATS.map(k => `<button class="seg-btn ${k === stat ? 'active' : ''}" data-prop-stat="${k}">${STAT_LABEL[k]}</button>`).join('')}</div></div></div>
+    ${stale > 3 ? `<div class="notice warn"><strong>Player numbers are ${stale} days old.</strong> Recent games and trades are not in yet.</div>` : ''}
+    <div class="notice warn" style="margin:12px 0"><strong>Not included yet:</strong> injuries and who is sitting out tonight. Check the injury report before using a line. Polymarket prop prices are not compared here yet.</div>
+    ${body}`;
 }
 
 function bookCell(m) {
@@ -491,7 +511,9 @@ async function notificationTest() {
   catch { toast('Notification test unavailable in this browser context.'); }
 }
 function handleClick(e) {
-  const el = e.target.closest('[data-page],[data-sport],[data-mode],[data-game],[data-book],[data-load-game],[data-remove-leg],[data-test-notification],[data-export],[data-settle],[data-toggle]'); if (!el) return;
+  const el = e.target.closest('[data-props-for],[data-prop-stat],[data-page],[data-sport],[data-mode],[data-game],[data-book],[data-load-game],[data-remove-leg],[data-test-notification],[data-export],[data-settle],[data-toggle]'); if (!el) return;
+  if (el.dataset.propsFor) { state.propGame = el.dataset.propsFor; nav('players'); return; }
+  if (el.dataset.propStat) { state.propStat = el.dataset.propStat; render(); return; }
   if (el.dataset.page) { nav(el.dataset.page); return; }
   if (el.dataset.sport) { state.sport = el.dataset.sport; state.selectedGame = null; state.details = {}; state.books = {}; state.scores = null; state.preds = {}; refresh(); return; }
   if (el.dataset.mode) { if (el.dataset.mode === state.mode) return; state.mode = el.dataset.mode; state.selectedGame = null; state.details = {}; state.books = {}; state.scores = null; state.markets = null; state.preds = {}; state.history = {}; refresh(); return; }
@@ -525,7 +547,7 @@ function handleInput(e) {
   else if (e.target.matches('[data-player-search]')) { state.playerQuery = e.target.value.slice(0, 40); render(); }
 }
 document.addEventListener('click', handleClick); document.addEventListener('submit', handleSubmit);
-document.addEventListener('change', e => { if (e.target.matches('[data-player-team]')) handleInput(e); });
+document.addEventListener('change', e => { if (e.target.matches('[data-player-team]')) handleInput(e); if (e.target.matches('[data-prop-game]')) { state.propGame = e.target.value; render(); } });
 document.addEventListener('input', e => { if (e.target.matches('[data-player-search]')) handleInput(e); });
 window.addEventListener('online', () => { state.online = true; refresh(); });
 window.addEventListener('offline', () => { state.online = false; render(); });

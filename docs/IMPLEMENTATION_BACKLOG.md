@@ -20,7 +20,7 @@ Status key: **Implemented** (code exists) / **Tested offline** (automated tests 
 | Paper journal with settlement, P&L, drawdown, fees | Yes | UI test | n/a | |
 | In-app alerts (dedupe, expiry, sound, research-watch) | Yes | Partial | No | Qualified alerts cannot fire while gated |
 | Player intelligence (rotation value) | Yes | Via pregame validation | n/a | Prop probabilities not built |
-| Player-prop distributions | **No** | | | Phase 4 |
+| Player-prop projections NBA-PROPS-v1.0 (PTS/REB/AST/3PM ladders) | Yes | Yes, 58k held-out player-games 2025-2027; beats last-10 hit rate on every stat | Deployed | No injury/minutes news; data snapshot ages; Polymarket prop prices not compared yet |
 | Correlated parlay engine | Partial (joint-from-simulation function + tests) | Yes | | Needs prop model; native Combo needs authenticated RFQ |
 | Background scanner + iPhone push | **No** | | | Phase 7 |
 | NFL / MLB models | **No** | | | Phases after NBA |
@@ -37,6 +37,12 @@ Status key: **Implemented** (code exists) / **Tested offline** (automated tests 
 7. [ ] Verify Polymarket US fee schedule from the official source; mark fee verified only then.
 8. [ ] Server-side scanner (user-owned computer or free scheduled job) + VAPID web push + iPhone end-to-end test.
 9. [ ] Promote model out of RESEARCH status only after prospective paper results with honest intervals (see ACCEPTANCE_GATES.md).
+
+## Next up
+- [ ] Daily data refresh (GitHub Action, free) so player numbers and ratings never go stale
+- [ ] Pull Polymarket player-prop markets and compare prices with our ladders
+- [ ] Injury feed into minutes projections
+- [ ] Background scanner + iPhone push
 
 ## Live findings 2026-11-10
 - Polymarket NBA moneyline = ONE market per game with two sides (marketSides). The order book prices the FIRST listed side; the second side is 1 - bid. Verified against polymarket.us page (Bucks 10% = 10c ask, Knicks 91%). Compare screen now evaluates both teams.

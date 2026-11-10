@@ -4,7 +4,7 @@ import { join, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const ROOT=resolve(fileURLToPath(new URL('..',import.meta.url)));
 const PORT=Number(process.env.PORT)||4173;
-export const PUBLIC_PATH=/^\/(?:index\.html|app\.js|styles\.css|sw\.js|manifest\.webmanifest|assets\/[a-zA-Z0-9._-]+|models\/nba-(?:pregame|live)\.json|lib\/(?:model|value|utils|stats|market)\.mjs|lib\/nba\/(?:ratings|pregame|live|predict|availability)\.mjs)$/;
+export const PUBLIC_PATH=/^\/(?:index\.html|app\.js|styles\.css|sw\.js|manifest\.webmanifest|assets\/[a-zA-Z0-9._-]+|models\/nba-(?:pregame|live|props)\.json|lib\/(?:model|value|utils|stats|market)\.mjs|lib\/nba\/(?:ratings|pregame|live|predict|availability|props)\.mjs)$/;
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.webmanifest':'application/manifest+json','.json':'application/json'};
 const ROUTES=Object.freeze({scores:'scores.mjs',game:'game.mjs',markets:'markets.mjs',quote:'quote.mjs',book:'book.mjs',health:'health.mjs','push-register':'push-register.mjs'});
 export const server=createServer(async (req,res)=>{

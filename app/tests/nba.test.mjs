@@ -219,3 +219,21 @@ test('predictor: catch-up applies only completed games before the cutoff date, o
   assert.equal(p2.applyResults([fin], cutoff), 0, 'not applied twice');
   assert.ok(p2.ratingsAsOf > asOf);
 });
+
+import { nbAtLeast, projectPlayer, sizeFor } from '../lib/nba/props.mjs';
+test('props: negative binomial tail is sane and monotonic', () => {
+  assert.equal(nbAtLeast(0, 8, 5), 1);
+  const a = nbAtLeast(6, 8, 5), b = nbAtLeast(8, 8, 5), c = nbAtLeast(12, 8, 5);
+  assert.ok(a > b && b > c && c > 0);
+  // 8 expected rebounds does not make 6+ near-certain
+  assert.ok(a < 0.8, String(a));
+});
+test('props artifact: no market inputs, validated, players have rates', () => {
+  const pm = JSON.parse(readFileSync(new URL('../models/nba-props.json', import.meta.url)));
+  assert.equal(pm.marketInputs, 'NONE');
+  for (const s of ['points', 'rebounds', 'assists', 'fg3m']) assert.ok(pm.validation.summary[s].sportspilot.brier < pm.validation.summary[s].last10.brier);
+  assert.ok(pm.players.length > 200);
+  const card = projectPlayer(pm.players[0], {}, pm.dispersion);
+  assert.ok(card.stats.points.ladder.every((x, i, arr) => i === 0 || x.p <= arr[i - 1].p));
+  assert.ok(sizeFor(pm.dispersion.points, 20) > 0);
+});
