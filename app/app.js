@@ -1,8 +1,9 @@
 import { createPredictor } from './lib/nba/predict.mjs';
 import { calculateIndependentParlay, evaluateOpportunity } from './lib/value.mjs';
 import { brier, logLoss } from './lib/stats.mjs';
-import { executableFill } from './lib/market.mjs';
-import { projectPlayer, PROP_STATS, STAT_LABEL } from './lib/nba/props.mjs';
+import { executableFill, feeFractionOfStake } from './lib/market.mjs';
+import { gameFindings } from './lib/alerts.mjs';
+import { projectPlayer, PROP_STATS, STAT_LABEL, nbAtLeast, sizeFor } from './lib/nba/props.mjs';
 const PAGE_NAMES = { overview: 'Dashboard', live: 'Games', players: 'Player props', opportunities: 'Compare with Polymarket', parlays: 'Parlay calculator', performance: 'Results', settings: 'Alerts & settings' };
 const DEMO_GAMES = [
   { id: '700001', league: 'nba', name: 'Metro Comets at Harbor Waves', status: 'in', statusName: 'STATUS_IN_PROGRESS', statusText: 'Q3 · 06:00', period: 3, clock: '6:00', clockSeconds: 360, startTime: null, home: { id: 'demo-h1', name: 'Harbor Waves', abbr: 'HWV', score: 91, record: { wins: 31, losses: 19, pct: .62 } }, away: { id: 'demo-a1', name: 'Metro Comets', abbr: 'MCO', score: 85, record: { wins: 27, losses: 23, pct: .54 } }, demoPrior: { expMargin48: 2.5, pace: 99, expTotal48: 226 } },
@@ -23,7 +24,7 @@ const state = {
   models: { pregame: null, live: null, error: null }, predictor: null, preds: {}, history: {},
   legs: safeRead('legs', [{ id: 1, label: 'Hypothetical selection A', p: .60, multiplier: 1.50 }, { id: 2, label: 'Hypothetical selection B', p: .50, multiplier: 2.10 }]),
   journal: safeRead('journal', []), links: safeRead('links', {}), autoLinks: {}, caughtUpFor: null, predLog: safeRead('predlog', {}),
-  settings: { ...DEFAULT_SETTINGS, ...safeRead('settings', {}) }, alerts: [], alertSeen: new Map(), playerTeam: null, playerQuery: '', propGame: null, propStat: 'points', online: navigator.onLine,
+  settings: { ...DEFAULT_SETTINGS, ...safeRead('settings', {}) }, alerts: [], alertSeen: new Map(), playerTeam: null, playerQuery: '', propGame: null, propStat: 'points', injuries: null, eventDetail: {}, propBooks: {}, propFilter: false, push: { state: 'unknown' }, scanStatus: null, online: navigator.onLine,
 };
 let toastTimer = null;
 function toast(message) { const t = $('toast'); t.textContent = message; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 4200); }
@@ -72,7 +73,7 @@ function predictAll() {
   const now = new Date().toISOString();
   for (const g of currentGames()) {
     if (g.league !== 'nba') continue;
-    const r = state.predictor.predict(g, { sims: state.settings.sims, ...(isDemo() ? { syntheticPrior: g.demoPrior } : {}) });
+    const r = state.predictor.predict(g, { sims: state.settings.sims, ...(isDemo() ? { syntheticPrior: g.demoPrior } : state.injuries ? { out: state.injuries.out } : {}) });
     state.preds[g.id] = r;
     if (r.live.available) {
       const h = state.history[g.id] || (state.history[g.id] = []);
@@ -138,18 +139,7 @@ function sparkline(points, w = 560, h = 120) {
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="Home win probability over time, ${points.length} updates, latest ${pct(points.at(-1).p)}"><line x1="8" x2="${w - 8}" y1="${ys(0.5)}" y2="${ys(0.5)}" class="spark-mid"/><path d="${d}" class="spark-line"/><circle cx="${xs(points.length - 1)}" cy="${ys(points.at(-1).p)}" r="4" class="spark-dot"/><text x="8" y="${h - 2}" class="spark-label">${esc(points[0].label)}</text><text x="${w - 8}" y="${h - 2}" text-anchor="end" class="spark-label">${esc(points.at(-1).label)}</text></svg>`;
 }
 function findings() {
-  const out = [];
-  for (const g of currentGames()) {
-    const r = predOf(g); if (!r) continue;
-    if (r.live.available) {
-      const m = g.home.score - g.away.score, trailHome = m < 0, pTrail = trailHome ? r.live.homeProbability : 1 - r.live.homeProbability;
-      if (Math.abs(m) >= 6 && pTrail >= 0.2) out.push({ g, text: `${trailHome ? g.home.abbr : g.away.abbr} trails by ${Math.abs(m)} but keeps a ${pct(pTrail, 0)} chance (strength prior + time left).` });
-      if (r.pregame.available && Math.abs(r.live.homeProbability - r.pregame.homeProbability) >= 0.25) out.push({ g, text: `${g.home.abbr} win chance moved ${pct(r.pregame.homeProbability, 0)} → ${pct(r.live.homeProbability, 0)} since tip.` });
-    } else if (g.status === 'pre' && r.pregame.available) {
-      const p = r.pregame.homeProbability; if (Math.abs(p - 0.5) <= 0.06) out.push({ g, text: `${g.away.abbr} at ${g.home.abbr} projects as a coin flip (${pct(p, 0)} home).` });
-    }
-  }
-  return out.slice(0, 5);
+  return currentGames().flatMap(g => gameFindings(g, predOf(g)).map(f => ({ g, text: f.text, key: f.key }))).slice(0, 5);
 }
 
 // ---------- pages ----------
@@ -213,6 +203,24 @@ function renderLive() {
   return `${sectionHeader('Games', 'Tonight and tomorrow. Tap any game for our pick and why.')}${help(['<b>Chance to win right now</b>: how likely each team is to win from here, based on the score, time left and how good each team is.', '<b>Likely range</b>: our best guess is not exact. The real chance is probably inside this range.', '<b>Why</b>: the main reasons behind the number, in plain words.', '<b>Before the game</b>: what we thought before tip-off. Compare it with the live number to see how much the game has changed.', '<b>What the model can\'t see</b>: things it doesn\'t know yet (like foul trouble). Keep these in mind yourself.'])}<div class="panel panel-pad">${gamesPanel(30)}</div>${sectionHeader('Game breakdown', 'Our pick, the reasons, and what we can\'t see.')}${modelPanel(chosen)}`;
 }
 
+const normName = n => String(n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z ]/g, '').replace(/\b(jr|sr|ii|iii|iv)\b/g, '').replace(/\s+/g, ' ').trim();
+function eventSlugFor(g) {
+  for (const ev of currentEvents()) for (const m of (ev.markets || [])) { const l = linkFor(m); if (l?.gameId === g.id) return ev.slug; }
+  return null;
+}
+async function loadEventDetail(slug) {
+  if (!slug || isDemo()) return;
+  const cur = state.eventDetail[slug];
+  if (cur && (cur.loading || Date.now() - Date.parse(cur.fetchedAt || 0) < 60_000)) return;
+  state.eventDetail[slug] = { ...(cur || {}), loading: true };
+  try { state.eventDetail[slug] = await fetchAPI(`/api/event?slug=${encodeURIComponent(slug)}`); } catch (e) { state.eventDetail[slug] = { error: e.message, fetchedAt: new Date().toISOString() }; }
+  render();
+}
+async function checkPropPrice(slug) {
+  state.propBooks[slug] = { loading: true }; render();
+  try { state.propBooks[slug] = await fetchAPI(`/api/book?slug=${encodeURIComponent(slug)}`); } catch (e) { state.propBooks[slug] = { error: e.message }; }
+  render();
+}
 function propsForGame(g) {
   const pm = state.models.props, rt = state.models.pregame?.ratings;
   if (!pm || !rt) return null;
@@ -222,14 +230,47 @@ function propsForGame(g) {
   const side = (teamId, oppId) => {
     const opp = team(oppId);
     const ctx = { paceFactor: pace, oppDefFactor: opp ? (rt.leagueOrtg + opp.def) / rt.leagueOrtg : 1 };
-    return pm.players.filter(p => p.teamId === Number(teamId)).map(p => projectPlayer(p, ctx, pm.dispersion)).sort((a, b) => b.minutes - a.minutes);
+    const cards = pm.players.filter(p => p.teamId === Number(teamId)).map(p => ({ ...projectPlayer(p, ctx, pm.dispersion), injury: state.injuries?.byId.get(String(p.id)) || null, raw: p, ctx }));
+    return { active: cards.filter(c => !c.injury?.out).sort((a, b) => b.minutes - a.minutes), out: cards.filter(c => c.injury?.out) };
   };
   return { home: side(g.home.id, g.away.id), away: side(g.away.id, g.home.id) };
 }
-function propTable(abbr, list, stat) {
+const ourChance = (card, stat, line) => nbAtLeast(Math.ceil(line), card.stats[stat].mean, sizeFor(state.models.props.dispersion[stat], card.stats[stat].mean));
+function propTable(abbr, side, stat, pmIndex) {
   const lines = state.models.props.ladders[stat];
-  if (!list.length) return `<p class="muted">No recent player data for ${esc(abbr)}.</p>`;
-  return `<div class="table-wrap"><table class="table compact props"><thead><tr><th>${esc(abbr)}</th><th>MIN</th><th>PROJ.</th>${lines.map(k => `<th>${k}+</th>`).join('')}</tr></thead><tbody>${list.map(p => { const st = p.stats[stat]; return `<tr><td><strong>${esc(p.name)}</strong></td><td class="num">${p.minutes.toFixed(0)}</td><td class="num"><strong>${st.mean.toFixed(1)}</strong></td>${st.ladder.map(x => `<td class="num ${x.p >= 0.6 ? 'good-text' : x.p < 0.15 ? 'muted' : ''}">${Math.round(x.p * 100)}%</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>`;
+  if (!side.active.length) return `<p class="muted">No recent player data for ${esc(abbr)}.</p>`;
+  const cell = (c, k, p) => { const pmp = pmIndex.get(`${normName(c.name)}|${stat}|${k}`); return `<td class="num ${p >= 0.6 ? 'good-text' : p < 0.15 ? 'muted' : ''}">${Math.round(p * 100)}%${pmp?.ask ? `<small class="pm">PM ${Math.round(pmp.ask * 100)}¢</small>` : ''}</td>`; };
+  return `<div class="table-wrap"><table class="table compact props"><thead><tr><th>${esc(abbr)}</th><th>MIN</th><th>PROJ.</th>${lines.map(k => `<th>${k}+</th>`).join('')}</tr></thead><tbody>${side.active.map(c => { const st = c.stats[stat]; return `<tr><td><strong>${esc(c.name)}</strong>${c.injury ? `<small class="inj">${esc(c.injury.status)}</small>` : ''}</td><td class="num">${c.minutes.toFixed(0)}</td><td class="num"><strong>${st.mean.toFixed(1)}</strong></td>${st.ladder.map(x => cell(c, x.line, x.p)).join('')}</tr>`; }).join('')}</tbody></table></div>
+    ${side.out.length ? `<p class="muted small-note">Ruled out: ${esc(side.out.map(c => c.name).join(', '))}</p>` : ''}`;
+}
+function bestSpots(g, pr, detail) {
+  if (!detail?.props?.length) return [];
+  const cards = new Map([...pr.home.active, ...pr.away.active].map(c => [normName(c.name), c]));
+  const out = [];
+  for (const pp of detail.props) {
+    if (!pp.stat || !PROP_STATS.includes(pp.stat)) continue;
+    const c = cards.get(normName(pp.player)); if (!c) continue;
+    const p = ourChance(c, pp.stat, pp.line);
+    if (pp.ask && pp.ask > 0.02 && pp.ask < 0.97) out.push({ pp, c, side: 'Yes', ours: p, price: pp.ask, diff: p - pp.ask });
+    if (pp.bid && pp.bid > 0.03 && pp.bid < 0.98) out.push({ pp, c, side: 'No', ours: 1 - p, price: 1 - pp.bid, diff: (1 - p) - (1 - pp.bid) });
+  }
+  const f = state.propFilter ? out.filter(x => 1 / x.price >= state.settings.min && 1 / x.price <= state.settings.max) : out;
+  return f.sort((a, b) => b.diff - a.diff).slice(0, 10);
+}
+function spotRow(x, detail) {
+  const bk = state.propBooks[x.pp.slug], s = state.settings;
+  let check = `<button class="sm-btn" data-prop-check="${esc(x.pp.slug)}">Check live price</button>`;
+  if (bk?.loading) check = '<span class="muted">Checking…</span>';
+  else if (bk?.error) check = `<span class="error-text">${esc(bk.error)}</span>`;
+  else if (bk?.ok) {
+    const fill = executableFill(bk, x.side === 'Yes' ? 'YES' : 'NO', s.stake);
+    const lowP = Math.max(0.001, x.ours - 0.06); // props band: +/- 6 pts covers observed calibration error by band
+    const ev = evaluateOpportunity({ p: x.ours, pLow: lowP, fill, book: bk, fee: { fraction: fill.ok ? feeFractionOfStake(detail.feeCoefficient, fill.avgPrice) : null, verified: s.feeVerified },
+      checks: { modelStatus: 'research', linkVerified: true, inputsComplete: Boolean(state.injuries), gameStateAgeSec: 0 },
+      gates: { maxQuoteAgeSec: s.maxQuoteAge, minNetEV: s.minEV / 100, minGrossMultiple: s.min, maxGrossMultiple: s.max, maxSlippage: s.maxSlippageC / 100, edgeMustExceedUncertainty: true } });
+    check = `<span><strong>${fill.ok ? `${(fill.avgPrice * 100).toFixed(1)}¢ live` : esc(fill.reason)}</strong> · <span class="badge ${ev.actionable ? 'green' : 'red'}">${ev.actionable ? 'WORTH A LOOK' : 'NOT A BET'}</span></span>${ev.blockers.length ? `<details class="drill"><summary>Why not</summary><ul class="blockers">${ev.blockers.map(b => `<li>${esc(b)}</li>`).join('')}</ul></details>` : ''}`;
+  }
+  return `<div class="data-row spot"><div><strong>${esc(x.c.name)} ${x.side === 'Yes' ? `${x.pp.line}+` : `under ${x.pp.line}`} ${esc(STAT_LABEL[x.pp.stat].toLowerCase())}</strong><small>Our chance ${pct(x.ours, 0)} · Polymarket ${Math.round(x.price * 100)}¢ (listing) · pays ${(1 / x.price).toFixed(2)}× · difference <b class="${x.diff > 0 ? 'good-text' : ''}">${x.diff > 0 ? '+' : ''}${Math.round(x.diff * 100)} pts</b></small></div><div class="row-actions">${check}</div></div>`;
 }
 function renderPlayers() {
   const pm = state.models.props;
@@ -240,14 +281,24 @@ function renderPlayers() {
   const stat = state.propStat;
   const v = pm.validation.summary[stat];
   const stale = Math.round((Date.now() - Date.parse(pm.asOfDate)) / 86400000);
-  const body = g ? (() => { const pr = propsForGame(g); return `<div class="two-up">${['away', 'home'].map(side => `<div class="panel"><div class="panel-head"><div class="panel-title">${esc(g[side].name)}</div><span class="badge">${side === 'home' ? 'HOME' : 'AWAY'}</span></div><div class="panel-pad">${propTable(g[side].abbr, pr[side], stat)}</div></div>`).join('')}</div>`; })()
-    : emptyBlock('No upcoming games loaded', 'Games for today and tomorrow appear here once ESPN lists them.');
-  return `${sectionHeader('Player props', `Our projection and chance of each line for every rotation player. Player numbers through ${esc(pm.asOfDate)}.`)}${help(['Pick a game and a stat. <b>PROJ.</b> is the number we expect. <b>10+, 15+…</b> is our chance he reaches that line.', '<b>MIN</b> is the minutes he has been playing lately. If he plays a lot less (injury, blowout), the chances drop.', 'Green = 60% or better. Faded = under 15%.', `Checked on ${v.n.toLocaleString()} past player-games: these chances were more accurate than the usual "hit in X of his last 10" stat.`])}
+  let body = emptyBlock('No upcoming games loaded', 'Games for today and tomorrow appear here once ESPN lists them.'), spots = '';
+  if (g) {
+    const pr = propsForGame(g), slug = eventSlugFor(g), detail = slug ? state.eventDetail[slug] : null;
+    if (slug && (!detail || (!detail.loading && Date.now() - Date.parse(detail.fetchedAt || 0) > 60_000))) setTimeout(() => loadEventDetail(slug), 0);
+    const pmIndex = new Map((detail?.props || []).filter(x => x.stat).map(x => [`${normName(x.player)}|${x.stat}|${x.line}`, x]));
+    body = `<div class="two-up">${['away', 'home'].map(side => `<div class="panel"><div class="panel-head"><div class="panel-title">${esc(g[side].name)}</div><span class="badge">${side === 'home' ? 'HOME' : 'AWAY'}</span></div><div class="panel-pad">${propTable(g[side].abbr, pr[side], stat, pmIndex)}</div></div>`).join('')}</div>`;
+    const list = bestSpots(g, pr, detail);
+    spots = `${sectionHeader('Biggest disagreements with Polymarket', slug ? (detail?.loading ? 'Loading Polymarket props…' : detail?.error ? `Polymarket props unavailable: ${esc(detail.error)}` : `${detail?.props?.length || 0} Polymarket props for this game.`) : 'Polymarket has not listed this game yet.', `<button class="sm-btn ${state.propFilter ? 'active-filter' : ''}" data-prop-filter="1">${state.propFilter ? `Showing ${state.settings.min}×–${state.settings.max}× only` : `Only ${state.settings.min}×–${state.settings.max}× payouts`}</button>`)}
+      <div class="panel panel-pad">${list.length ? `<div class="data-list">${list.map(x => spotRow(x, detail)).join('')}</div><p class="muted small-note">Listing prices can lag. "Check live price" pulls the real order book and runs every safety check. Ranked by how much more likely we think it is than the price says.</p>` : '<p class="muted">Nothing to compare yet.</p>'}</div>`;
+  }
+  const injNote = state.injuries ? `Injury report loaded ${esc(ago(state.injuries.fetchedAt))}: players ruled out are removed; day-to-day players are tagged.` : 'Injury report not loaded yet.';
+  return `${sectionHeader('Player props', `Our projection and chance of each line, next to Polymarket's price. Player numbers through ${esc(pm.asOfDate)}.`)}${help(['Pick a game and a stat. <b>PROJ.</b> is the number we expect. <b>10+, 15+…</b> is our chance he reaches that line. <b>PM 54¢</b> under it is Polymarket\'s price for the same line.', '<b>Biggest disagreements</b> lists the lines where our chance is furthest above Polymarket\'s price. Use the button to show only 3×–5× payouts.', '<b>MIN</b> is his recent minutes. Players ruled out are removed automatically. We do not yet bump teammates\' minutes when someone sits.', `Checked on ${v.n.toLocaleString()} past player-games: more accurate than the usual "hit in X of his last 10" stat.`])}
     <div class="control-row"><div class="field grow"><label for="propGame">Game</label><select id="propGame" data-prop-game>${games.map(x => `<option value="${esc(x.id)}" ${g && x.id === g.id ? 'selected' : ''}>${esc(x.away.abbr)} at ${esc(x.home.abbr)} · ${x.status === 'in' ? 'LIVE' : new Date(x.startTime).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</option>`).join('')}</select></div>
     <div class="field grow"><label>Stat</label><div class="segmented">${PROP_STATS.map(k => `<button class="seg-btn ${k === stat ? 'active' : ''}" data-prop-stat="${k}">${STAT_LABEL[k]}</button>`).join('')}</div></div></div>
-    ${stale > 3 ? `<div class="notice warn"><strong>Player numbers are ${stale} days old.</strong> Recent games and trades are not in yet.</div>` : ''}
-    <div class="notice warn" style="margin:12px 0"><strong>Not included yet:</strong> injuries and who is sitting out tonight. Check the injury report before using a line. Polymarket prop prices are not compared here yet.</div>
-    ${body}`;
+    ${stale > 3 ? `<div class="notice warn"><strong>Player numbers are ${stale} days old.</strong> The daily refresh should update them.</div>` : ''}
+    <p class="muted small-note">${injNote}</p>
+    ${spots}
+    ${sectionHeader('All players', '')}${body}`;
 }
 
 function bookCell(m) {
@@ -270,9 +321,9 @@ function suggestLink(m, games) {
   if (!g) return null;
   return { gameId: g.id, team: names[0] === g.home.name.toLowerCase() ? 'home' : 'away' };
 }
-function sideResult(label, abbr, p, pLow, fill, b, srcKind) {
+function sideResult(label, abbr, p, pLow, fill, b, srcKind, feeCoef = null) {
   const s = state.settings;
-  const ev = evaluateOpportunity({ p, pLow, fill, book: b && !b.error ? b : null, fee: { fraction: Number.isFinite(s.feePct) ? s.feePct / 100 : null, verified: s.feeVerified },
+  const ev = evaluateOpportunity({ p, pLow, fill, book: b && !b.error ? b : null, fee: { fraction: fill?.ok ? feeFractionOfStake(feeCoef, fill.avgPrice) : null, verified: s.feeVerified },
     checks: { modelStatus: 'research', linkVerified: true, inputsComplete: false, gameStateAgeSec: isDemo() ? 0 : (Date.now() - Date.parse(state.scores?.fetchedAt || 0)) / 1000 },
     gates: { maxQuoteAgeSec: s.maxQuoteAge, minNetEV: s.minEV / 100, minGrossMultiple: s.min, maxGrossMultiple: s.max, maxSlippage: s.maxSlippageC / 100, edgeMustExceedUncertainty: true } });
   const edge = fill.ok && Number.isFinite(p) ? p - fill.avgPrice : null;
@@ -281,6 +332,7 @@ function sideResult(label, abbr, p, pLow, fill, b, srcKind) {
     <div class="result-line"><span>Polymarket price for ${dollar(s.stake)}</span><strong>${fill.ok ? `${(fill.avgPrice * 100).toFixed(1)}¢ (${pct(fill.avgPrice, 0)})` : esc(fill.reason)}</strong></div>
     <div class="result-line"><span>Difference</span><strong class="${edge > 0 ? 'good-text' : ''}">${edge === null ? '—' : `${edge > 0 ? '+' : ''}${(edge * 100).toFixed(1)} pts ${edge > 0 ? '(we like it more)' : '(market likes it more)'}`}</strong></div>
     <div class="result-line"><span>If it wins, ${dollar(s.stake)} pays back</span><strong>${fill.ok ? `${dollar(s.stake / fill.avgPrice)} (${(1 / fill.avgPrice).toFixed(2)}×)` : '—'}</strong></div>
+    <div class="result-line"><span>Expected profit after est. fees</span><strong class="${ev.netEV > 0 ? 'good-text' : ''}">${ev.netEV !== null ? pct(ev.netEV) : '—'}</strong></div>
     <div class="result-line"><span>Verdict</span><span class="badge ${ev.actionable ? 'green' : 'red'}">${ev.actionable ? 'WORTH A LOOK' : 'NOT A BET'}</span></div>
     ${ev.blockers.length ? `<details class="drill"><summary>Why not (${ev.blockers.length})</summary><ul class="blockers">${ev.blockers.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}</div>`;
   return { ev, html };
@@ -300,7 +352,7 @@ function boardRow(m) {
   const fillA = okBook ? executableFill(b, 'YES', state.settings.stake) : { ok: false, reason: why };
   const fillB = okBook ? executableFill(b, 'NO', state.settings.stake) : { ok: false, reason: why };
   const teamA = link.team === 'home' ? g.home.abbr : g.away.abbr, teamB = link.team === 'home' ? g.away.abbr : g.home.abbr;
-  const A = sideResult(sideA, teamA, pA, pLowA, fillA, b, kind), B = sideResult(sideB, teamB, pA === null ? null : 1 - pA, pLowB, fillB, b, kind);
+  const A = sideResult(sideA, teamA, pA, pLowA, fillA, b, kind, m.feeCoefficient), B = sideResult(sideB, teamB, pA === null ? null : 1 - pA, pLowB, fillB, b, kind, m.feeCoefficient);
   maybeAlert(m, g, { ...link, label: teamA }, pA, A.ev); maybeAlert(m, g, { ...link, label: teamB }, pA === null ? null : 1 - pA, B.ev);
   const edgeA = fillA.ok && Number.isFinite(pA) ? pA - fillA.avgPrice : -1, edgeB = fillB.ok && Number.isFinite(pA) ? (1 - pA) - fillB.avgPrice : -1;
   const when = g.status === 'in' ? `LIVE · ${esc(g.statusText)}` : g.status === 'post' ? 'FINAL' : new Date(g.startTime).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
@@ -372,7 +424,7 @@ const pnl = x => x.status === 'WON' ? x.stake * (1 - (x.feePct || 0) / 100) / x.
 
 function renderSettings() {
   const s = state.settings;
-  return `${sectionHeader('Alerts & settings', 'The defaults are strict on purpose. Fewer, better alerts.')}${help(['<b>Payout range</b>: only consider bets that pay back between these amounts (3× means $5 pays back $15).', '<b>Bet size</b>: the amount used to check real prices.', '<b>Minimum expected profit</b>: how big an edge must be before we call it worth a look.', '<b>Fee</b>: Polymarket\'s fee. Look it up on Polymarket, enter it, and tick the box.', 'Change something, then tap Save settings.'])}
+  return `${sectionHeader('Alerts & settings', 'The defaults are strict on purpose. Fewer, better alerts.')}${help(['<b>Payout range</b>: only consider bets that pay back between these amounts (3× means $5 pays back $15).', '<b>Bet size</b>: the amount used to check real prices.', '<b>Minimum expected profit</b>: how big an edge must be before we call it worth a look.', '<b>Fee</b>: estimated automatically from each market. Tick the box once you have checked Polymarket\'s fee page.', 'Change something, then tap Save settings.'])}
     <form id="settingsForm"><div class="two-up"><div class="panel"><div class="panel-head"><div class="panel-title">Basics</div><span class="badge">SAVED ON THIS DEVICE</span></div><div class="panel-pad form-grid">
       <div class="field"><label for="targetMin">Lowest payout (×)</label><input id="targetMin" name="min" type="number" min="1.01" max="20" step="0.25" value="${s.min}" /></div><div class="field"><label for="targetMax">Highest payout (×)</label><input id="targetMax" name="max" type="number" min="1.01" max="20" step="0.25" value="${s.max}" /></div>
       <div class="field"><label for="stake">Bet size ($)</label><input id="stake" name="stake" type="number" min="1" max="10000" step="1" value="${s.stake}" /><small>Used to check real prices.</small></div>
@@ -380,8 +432,8 @@ function renderSettings() {
       <div class="field"><label for="sims">Accuracy level</label><select id="sims" name="sims">${[[2000, 'Fast'], [4000, 'Normal'], [8000, 'Most precise']].map(([x, l]) => `<option value="${x}" ${s.sims === x ? 'selected' : ''}>${l}</option>`).join('')}</select><small>Higher uses more battery.</small></div></div></div>
     <div class="panel"><div class="panel-head"><div class="panel-title">Safety checks</div><span class="badge orange">STRICT</span></div><div class="panel-pad form-grid">
       <div class="field"><label for="minEV">Minimum expected profit (%)</label><input id="minEV" name="minEV" type="number" min="1" max="100" step="0.5" value="${s.minEV}" /></div><div class="field"><label for="maxQuoteAge">Oldest price allowed (seconds)</label><input id="maxQuoteAge" name="maxQuoteAge" type="number" min="2" max="60" step="1" value="${s.maxQuoteAge}" /></div>
-      <div class="field"><label for="maxSlippageC">Max price jump from your bet (¢)</label><input id="maxSlippageC" name="maxSlippageC" type="number" min="0" max="10" step="0.5" value="${s.maxSlippageC}" /></div><div class="field"><label for="feePct">Polymarket fee (%)</label><input id="feePct" name="feePct" type="number" min="0" max="20" step="0.01" value="${Number.isFinite(s.feePct) ? s.feePct : ''}" placeholder="not set" /></div>
-      <div class="field" style="grid-column:1/-1"><label class="check"><input type="checkbox" name="feeVerified" ${s.feeVerified ? 'checked' : ''}/> I checked this fee on Polymarket's website</label></div></div></div></div>
+      <div class="field"><label for="maxSlippageC">Max price jump from your bet (¢)</label><input id="maxSlippageC" name="maxSlippageC" type="number" min="0" max="10" step="0.5" value="${s.maxSlippageC}" /></div><div class="field"><label>Polymarket fee</label><small>Estimated from each market's listed fee rate: rate × price × (1 − price) per contract. About 8.6% of your stake on a 10¢ pick, 2.4% on a 75¢ pick.</small></div>
+      <div class="field" style="grid-column:1/-1"><label class="check"><input type="checkbox" name="feeVerified" ${s.feeVerified ? 'checked' : ''}/> I checked Polymarket's current fees and this estimate matches</label></div></div></div></div>
       <div class="field" style="margin-top:14px;max-width:240px"><button class="primary-btn" type="submit">Save settings</button></div></form>
     <div class="two-up" style="margin-top:16px"><div class="panel"><div class="panel-head"><div class="panel-title">Alerts while the app is open</div><span class="badge green">WORKING</span></div><div class="panel-pad">
       <div class="result-line"><span>"Worth a look" alerts</span><span class="badge green">ON</span></div>
@@ -389,10 +441,50 @@ function renderSettings() {
       <div class="result-line"><span>Sound</span><button class="sm-btn" data-toggle="sound">${s.sound ? 'ON' : 'OFF'}</button></div>
       <div class="result-line"><span>Phone notifications</span><button class="sm-btn" data-test-notification="true">Send a test</button></div>
       <p class="muted small-note">No repeats. Alerts go stale after 2 minutes. Game alerts tell you what's happening; they are not bets.</p></div></div>
-    <div class="panel"><div class="panel-head"><div class="panel-title">When the app is closed</div><span class="badge red">COMING NEXT</span></div><div class="panel-pad">
-      <div class="result-line"><span>Checking games in the background</span><span class="badge red">NOT YET</span></div><div class="result-line"><span>iPhone alerts</span><span class="badge red">NOT YET</span></div><div class="result-line"><span>Real-money alerts</span><span class="badge red">AFTER TESTING</span></div>
-      <p class="muted small-note">Next step: a free timer checks games every couple of minutes from 6 pm (noon on weekends) and sends alerts to your iPhone, even with the app closed.</p></div></div></div>
+    <div class="panel"><div class="panel-head"><div class="panel-title">When the app is closed</div><span class="badge ${state.push.state === 'on' ? 'green' : 'orange'}">${state.push.state === 'on' ? 'ON FOR THIS DEVICE' : 'OFF'}</span></div><div class="panel-pad">
+      <p class="muted small-note">Our server checks live games every couple of minutes (6 pm to 2 am, from noon on weekends) and sends comeback and big-swing notices to your phone. Research notices, not bets.</p>
+      ${pushHelp()}
+      <div class="result-line"><span>Alerts on this device</span>${state.push.state === 'on' ? '<button class="sm-btn" data-push="off">Turn off</button>' : '<button class="sm-btn" data-push="on">Turn on</button>'}</div>
+      <div class="result-line"><span>Test</span><button class="sm-btn" data-push="test" ${state.push.state === 'on' ? '' : 'disabled'}>Send me a test alert</button></div>
+      <div class="result-line"><span>Last background check</span><strong>${state.scanStatus?.at ? `${esc(ago(state.scanStatus.at))} · ${state.scanStatus.live} live` : 'not yet'}</strong></div>
+      <div class="result-line"><span>"Worth a look" alerts</span><span class="badge orange">AFTER PAPER TRADING</span></div></div></div></div>
     ${sectionHeader('Recent alerts', 'Since you opened the app.')}<div class="panel panel-pad">${state.alerts.length ? `<div class="data-list">${state.alerts.slice(0, 20).map(a => `<div class="data-row"><div><strong>${esc(a.title)}</strong><small>${esc(a.body)}</small></div><span class="badge ${a.kind === 'qualified' ? 'green' : ''}">${esc(a.kind.toUpperCase())} · ${esc(ago(a.at))}${Date.now() > a.expires ? ' · EXPIRED' : ''}</span></div>`).join('')}</div>` : '<p class="muted">No alerts yet.</p>'}</div>`;
+}
+
+// ---------- background push ----------
+const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+const isiOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+function pushHelp() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return isiOS() && !isStandalone() ? `<div class="notice warn"><strong>First add SportsPilot to your Home Screen.</strong> In Safari tap Share, then Add to Home Screen, then open it from the new icon and come back here.</div>` : `<div class="notice warn">This browser does not support background alerts.</div>`;
+  if (isiOS() && !isStandalone()) return `<div class="notice warn"><strong>Open SportsPilot from your Home Screen icon</strong> to turn on alerts. iPhone only allows alerts for Home Screen apps.</div>`;
+  return '';
+}
+const b64ToBytes = b64 => { const s = atob((b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, c => c.charCodeAt(0)); };
+async function pushInit() {
+  try { const reg = await navigator.serviceWorker?.ready; const sub = await reg?.pushManager?.getSubscription(); state.push.state = sub ? 'on' : 'off'; } catch { state.push.state = 'off'; }
+  try { state.scanStatus = (await fetchAPI('/api/scan')).status; } catch { }
+}
+async function pushAction(kind) {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    if (kind === 'on') {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return toast('Notifications were not allowed. You can allow them in iPhone Settings > SportsPilot.');
+      const { publicKey } = await fetchAPI('/api/push-key');
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+      const res = await fetch('/api/push-subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ subscription: sub.toJSON() }) }).then(r => r.json());
+      if (!res.ok) throw new Error(res.error); state.push.state = 'on'; toast('Alerts are on for this device. Tap "Send me a test alert" to check.');
+    } else if (kind === 'test') {
+      const sub = await reg.pushManager.getSubscription(); if (!sub) return toast('Turn alerts on first.');
+      const res = await fetch('/api/push-subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'test', endpoint: sub.endpoint }) }).then(r => r.json());
+      toast(res.ok ? 'Test sent. It should appear in a few seconds.' : `Test failed: ${res.error}`);
+    } else if (kind === 'off') {
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) { await fetch('/api/push-subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'remove', endpoint: sub.endpoint }) }); await sub.unsubscribe(); }
+      state.push.state = 'off'; toast('Alerts are off for this device.');
+    }
+  } catch (e) { toast(`Could not change alerts: ${e.message || e}`); }
+  render();
 }
 
 // ---------- alerts ----------
@@ -437,7 +529,8 @@ async function refresh() {
   }
   state.loading = !state.scores; state.scoresError = null; state.marketsError = null; render();
   const today = etISO(0), tomorrow = etISO(1);
-  const [scores, sToday, sTomorrow, markets] = await Promise.allSettled([fetchAPI(`/api/scores?league=${state.sport}`), fetchAPI(`/api/scores?league=${state.sport}&date=${ymd(today)}`), fetchAPI(`/api/scores?league=${state.sport}&date=${ymd(tomorrow)}`), fetchAPI(`/api/markets?league=${state.sport}`)]);
+  const [scores, sToday, sTomorrow, markets, inj] = await Promise.allSettled([fetchAPI(`/api/scores?league=${state.sport}`), fetchAPI(`/api/scores?league=${state.sport}&date=${ymd(today)}`), fetchAPI(`/api/scores?league=${state.sport}&date=${ymd(tomorrow)}`), fetchAPI(`/api/markets?league=${state.sport}`), state.sport === 'nba' ? fetchAPI('/api/injuries?league=nba') : Promise.reject(new Error('n/a'))]);
+  if (inj.status === 'fulfilled') { const list = inj.value.players; state.injuries = { fetchedAt: inj.value.fetchedAt, list, out: new Set(list.filter(x => x.out).map(x => x.athleteId)), byId: new Map(list.map(x => [x.athleteId, x])) }; }
   if (isDemo()) return; // user switched mode mid-flight: never mix live into demo
   const okLists = [scores, sToday, sTomorrow].filter(x => x.status === 'fulfilled').map(x => x.value);
   state.scores = okLists.length ? { ...okLists[0], games: mergeGames(okLists) } : null;
@@ -511,7 +604,10 @@ async function notificationTest() {
   catch { toast('Notification test unavailable in this browser context.'); }
 }
 function handleClick(e) {
-  const el = e.target.closest('[data-props-for],[data-prop-stat],[data-page],[data-sport],[data-mode],[data-game],[data-book],[data-load-game],[data-remove-leg],[data-test-notification],[data-export],[data-settle],[data-toggle]'); if (!el) return;
+  const el = e.target.closest('[data-push],[data-prop-check],[data-prop-filter],[data-props-for],[data-prop-stat],[data-page],[data-sport],[data-mode],[data-game],[data-book],[data-load-game],[data-remove-leg],[data-test-notification],[data-export],[data-settle],[data-toggle]'); if (!el) return;
+  if (el.dataset.push) { pushAction(el.dataset.push); return; }
+  if (el.dataset.propFilter) { state.propFilter = !state.propFilter; render(); return; }
+  if (el.dataset.propCheck) { checkPropPrice(el.dataset.propCheck); return; }
   if (el.dataset.propsFor) { state.propGame = el.dataset.propsFor; nav('players'); return; }
   if (el.dataset.propStat) { state.propStat = el.dataset.propStat; render(); return; }
   if (el.dataset.page) { nav(el.dataset.page); return; }
@@ -536,9 +632,8 @@ function handleSubmit(e) {
     state.links[t.dataset.linkForm] = { gameId: String(f.get('gameId')), team: String(f.get('team')), side: 'YES', verifiedAt: new Date().toISOString(), by: 'user' }; save('links', state.links); render(); toast('Match saved.');
   } else if (t.id === 'settingsForm') {
     e.preventDefault(); const f = new FormData(t); const n = k => Number(f.get(k));
-    const s = { ...state.settings, min: n('min'), max: n('max'), refresh: n('refresh'), stake: n('stake'), sims: n('sims'), minEV: n('minEV'), maxQuoteAge: n('maxQuoteAge'), maxSlippageC: n('maxSlippageC'), feePct: f.get('feePct') === '' ? null : n('feePct'), feeVerified: Boolean(f.get('feeVerified')) };
+    const s = { ...state.settings, min: n('min'), max: n('max'), refresh: n('refresh'), stake: n('stake'), sims: n('sims'), minEV: n('minEV'), maxQuoteAge: n('maxQuoteAge'), maxSlippageC: n('maxSlippageC'), feeVerified: Boolean(f.get('feeVerified')) };
     if (!(s.min > 1 && s.max <= 20 && s.min <= s.max && s.stake >= 1 && s.minEV >= 1 && s.maxQuoteAge >= 2)) return toast('Something looks off. Check the payout range and bet size.');
-    if (s.feeVerified && s.feePct === null) s.feeVerified = false;
     state.settings = s; save('settings', s); predictAll(); render(); toast('Settings saved on this device.');
   }
 }
@@ -555,5 +650,5 @@ $('refreshBtn').addEventListener('click', () => refresh()); $('settingsQuick').a
 const hash = location.hash.replace('#', ''); if (PAGE_NAMES[hash]) state.page = hash;
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('/sw.js').catch(() => { });
 render();
-loadModels().then(refresh);
+loadModels().then(refresh).then(() => { if (!isDemo()) pushInit().then(render); });
 setInterval(() => { if (document.visibilityState === 'visible' && state.mode === 'live' && state.online && !state.loading && state.lastRefresh && Date.now() - Date.parse(state.lastRefresh) >= state.settings.refresh * 1000) refresh(); }, 5000);

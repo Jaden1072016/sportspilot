@@ -1,0 +1,45 @@
+name: Daily data refresh
+
+# Every morning (~6:20 am ET): pull yesterday's games, retrain team ratings and player
+# projections, run the tests, and commit the new model files. Netlify redeploys on push.
+on:
+  schedule:
+    - cron: '23 11 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pandas pyarrow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download and build data snapshot
+        run: python3 pipeline/ingest_hoopr.py --download --raw data/raw --out data/snapshot > /tmp/ingest.json
+      - name: Retrain team ratings and pregame model
+        run: node app/scripts/nba/train-pregame.mjs > /tmp/pregame.log
+      - name: Retrain player projections
+        run: node app/scripts/nba/train-props.mjs > /tmp/props.log
+      - name: Run tests
+        run: cd app && npm test
+      - name: Commit updated models
+        run: |
+          git config user.name "sportspilot-bot"
+          git config user.email "sportspilot-bot@users.noreply.github.com"
+          git add app/models docs/reports
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -m "Daily data refresh $(date -u +%F)"
+          git push

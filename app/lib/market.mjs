@@ -27,6 +27,7 @@ export function normalizeEvents(raw, league, fetchedAt = isoNow(), endpoint = 'v
       id: String(m.id || m.slug), slug: m.slug, question: m.question || m.title || m.slug, outcome: m.outcome || null,
       type: m.sportsMarketTypeV2 || m.sportsMarketType || 'UNKNOWN', line: safeNumber(m.line),
       comboEnabled: m.comboEnabled === true ? true : m.comboEnabled === false ? false : null,
+      feeCoefficient: safeNumber(m.feeCoefficient),
       teamProviderIds: (m.team?.providerIds || []).map(p => ({ provider: p.provider, id: String(p.providerId) })),
       teamName: m.team?.name || null,
       marketSides: (m.marketSides || []).map(s => ({ description: s.description || '', team: s.team?.name || null, identifier: s.identifier || null })),
@@ -84,3 +85,31 @@ export function executableFill(book, side, stakeUsd) {
   const top = ladder[0].px;
   return { ok: true, side, stakeUsd, contracts, avgPrice, topPrice: top, worstPrice: worst, slippage: avgPrice - top, grossMultiple: 1 / avgPrice };
 }
+
+export const eventURL = (slug) => `${BASE}/v1/events/slug/${encodeURIComponent(slug)}`;
+const STAT_MAP = { pts: 'points', reb: 'rebounds', ast: 'assists', '3pm': 'fg3m' };
+/**
+ * Player props and fee coefficient for one event (live-verified shape 2026-11-10).
+ * Listing prices (bestBid/bestAsk) carry no exchange timestamp: display only, never a verdict input.
+ */
+export function normalizeEventDetail(raw, fetchedAt = isoNow()) {
+  const e = raw?.event;
+  if (!e || !Array.isArray(e.markets)) throw new Error('Polymarket event schema mismatch');
+  const props = [], fee = new Set();
+  for (const m of e.markets) {
+    if (Number.isFinite(Number(m.feeCoefficient))) fee.add(Number(m.feeCoefficient));
+    if ((m.sportsMarketTypeV2 || '') !== 'SPORTS_MARKET_TYPE_PROP' || m.closed || m.active === false) continue;
+    const md = m.metadata || {};
+    const stat = STAT_MAP[String(md.statLabel || '').toLowerCase()] || null;
+    const line = safeNumber(m.line);
+    if (!md.playerName || line === null) continue;
+    props.push({ slug: m.slug, player: md.playerName, team: m.marketSides?.[0]?.team?.name || null, stat, statLabel: md.statLabel || null, line,
+      bid: amount(m.bestBidQuote), ask: amount(m.bestAskQuote), comboEnabled: m.comboEnabled === true, title: m.titleShort || m.title || m.question });
+  }
+  const coefs = [...fee];
+  return { ok: true, source: 'Polymarket US public', slug: e.slug, fetchedAt, gameStartTime: e.startTime || null, feeCoefficient: coefs.length === 1 ? coefs[0] : coefs.length ? Math.max(...coefs) : null,
+    props, warnings: ['Listing prices may lag the order book and have no timestamp. Check the live order book before acting.'] };
+}
+
+/** Estimated taker fee as a fraction of stake: coef x contracts x p(1-p) / stake = coef x (1 - p). Unverified estimate. */
+export const feeFractionOfStake = (coef, avgPrice) => (Number.isFinite(coef) && avgPrice > 0 && avgPrice < 1 ? coef * (1 - avgPrice) : null);

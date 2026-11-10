@@ -38,11 +38,14 @@ Status key: **Implemented** (code exists) / **Tested offline** (automated tests 
 8. [ ] Server-side scanner (user-owned computer or free scheduled job) + VAPID web push + iPhone end-to-end test.
 9. [ ] Promote model out of RESEARCH status only after prospective paper results with honest intervals (see ACCEPTANCE_GATES.md).
 
-## Next up
-- [ ] Daily data refresh (GitHub Action, free) so player numbers and ratings never go stale
-- [ ] Pull Polymarket player-prop markets and compare prices with our ladders
-- [ ] Injury feed into minutes projections
-- [ ] Background scanner + iPhone push
+## v0.4 (2026-11-10)
+- [x] Daily data refresh: `.github/workflows/daily-data.yml` (6:23 am ET) retrains ratings + props, runs tests, commits; Netlify redeploys.
+- [x] Polymarket player props via `/v1/events/slug/{slug}` (live-verified): listing prices beside our ladders, "biggest disagreements" with 3x-5x filter, live order-book check per prop.
+- [x] ESPN injury report (live-verified): OUT players removed from props; pregame switches to the lineup-aware model.
+- [x] Fees estimated from each market's `feeCoefficient` (fee = coef x contracts x p(1-p)); still flagged unverified until the user confirms.
+- [x] Background scanner (`scan-cron`, every 2 min, game hours only) + web push (VAPID keys auto-generated in Netlify Blobs). NOT yet verified end to end on an iPhone.
+- [ ] Teammate minutes redistribution when a player is out (not modeled).
+- [ ] Same-game correlated parlays from the prop model.
 
 ## Live findings 2026-11-10
 - Polymarket NBA moneyline = ONE market per game with two sides (marketSides). The order book prices the FIRST listed side; the second side is 1 - bid. Verified against polymarket.us page (Bucks 10% = 10c ask, Knicks 91%). Compare screen now evaluates both teams.

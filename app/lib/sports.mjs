@@ -99,3 +99,21 @@ export function normalizeSummary(raw, league, id, fetchedAt = isoNow()) {
     situation: { details: header?.status?.type?.detail || null, period: header?.status?.period ?? null, clock, clockSeconds: clockToSeconds(clock) },
     warnings: ['These player stats describe box scores only; they are not verified forward player-prop projections.', 'Starting status is only as accurate as the provider. On-court lineup state is not verified by this adapter.', 'Injury entries come from an unofficial feed and may be incomplete or late.'] };
 }
+
+export const injuriesURL = (league) => `https://site.api.espn.com/apis/site/v2/sports/${LEAGUES[validatedLeague(league)]}/injuries`;
+/**
+ * League-wide injury report (ESPN, unofficial). Statuses seen live: "Out", "Day-To-Day".
+ * Athlete ids come from the player-card link (/id/<n>/), which matches ESPN box-score ids.
+ */
+export function normalizeInjuries(raw, fetchedAt = isoNow()) {
+  if (!raw || !Array.isArray(raw.injuries)) throw new Error('ESPN injuries schema mismatch');
+  const players = [];
+  for (const t of raw.injuries) for (const i of (t.injuries || [])) {
+    const href = (i.athlete?.links || []).map(l => l.href || '').find(h => /\/id\/\d+/.test(h)) || '';
+    const id = (/\/id\/(\d+)/.exec(href) || [])[1];
+    if (!id) continue;
+    players.push({ teamId: String(i.athlete?.team?.id ?? t.id ?? ''), athleteId: id, name: i.athlete?.displayName || 'Unknown', status: String(i.status || i.type?.description || 'Unknown'),
+      out: /^out$/i.test(String(i.status || '')) || i.type?.name === 'INJURY_STATUS_OUT', detail: i.shortComment || null, returnDate: i.details?.returnDate || null, updated: i.date || null });
+  }
+  return { ok: true, source: 'ESPN injuries (unofficial)', fetchedAt, players, liveData: true, warnings: ['Unofficial feed; late scratches and game-time decisions may be missing.'] };
+}

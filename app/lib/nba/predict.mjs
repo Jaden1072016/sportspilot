@@ -42,7 +42,15 @@ export function createPredictor(pregameModel, liveModel) {
   const cache = new Map();
   const applied = new Set();
 
-  function pregameFor(g) {
+  /** Missing rotation value given a set of athlete ids ruled OUT (injury report). */
+  function availFrom(teamId, out) {
+    const rot = pregameModel.rotations?.[teamId] || [];
+    const total = rot.reduce((s, p) => s + p.value, 0);
+    const missingPlayers = rot.filter(p => out.has(String(p.id)));
+    return { known: true, total, missing: missingPlayers.reduce((s, p) => s + p.value, 0), missingPlayers };
+  }
+
+  function pregameFor(g, outSet = null) {
     const out = { available: false, evidence: [], warnings: [], blockers: [] };
     if (!ratings) { out.blockers.push('Pregame model artifact not loaded'); return out; }
     const hid = Number(g.home.id), aid = Number(g.away.id);
@@ -54,7 +62,8 @@ export function createPredictor(pregameModel, liveModel) {
     else if (stale > 1) out.warnings.push(`Team ratings were last updated ${ratings.lastGameDate} (${stale} days old)`);
     // preGame() needs a season label; keep the snapshot's current season.
     const pre = preGame(ratings, { season: ratings.season, homeId: hid, awayId: aid, date, neutral: Boolean(g.neutralSite) });
-    const feats = pregameFeatures(pre, null, null); // availability feed not connected yet
+    const aH = outSet ? availFrom(hid, outSet) : null, aA = outSet ? availFrom(aid, outSet) : null;
+    const feats = pregameFeatures(pre, aH, aA); // lineup-aware when an injury report is loaded
     const res = pregameProbability(pregameModel, feats);
     if (!res.available) { out.blockers.push(res.why); return out; }
     const minGames = Math.min(pre.homeGames, pre.awayGames);
@@ -67,7 +76,11 @@ export function createPredictor(pregameModel, liveModel) {
     if (pre.restAway === 1) out.evidence.push(`${tA} played yesterday (tired legs usually cost a little).`);
     out.evidence.push(`Projected score: ${tH} ${pre.expHomePts.toFixed(0)}, ${tA} ${pre.expAwayPts.toFixed(0)}.`);
     if (minGames < 10) out.warnings.push(`Early season: only ${minGames} games played, so ratings still lean on last season.`);
-    out.warnings.push('Injury reports are not connected yet, so this does not know who is sitting out tonight.');
+    if (feats.availKnown) {
+      for (const [abbr, a] of [[tH, aH], [tA, aA]]) if (a.missingPlayers.length) out.evidence.push(`${abbr} is missing ${a.missingPlayers.map(p => p.name).join(', ')} (ruled out). That is about ${a.total ? Math.round(100 * a.missing / a.total) : 0}% of their usual rotation value.`);
+      if (!aH.missingPlayers.length && !aA.missingPlayers.length) out.evidence.push('No regular rotation players are ruled out on the injury report.');
+      out.warnings.push('Injury report from ESPN. Players listed day-to-day are assumed to play; late scratches can still change things.');
+    } else out.warnings.push('Injury report not loaded, so this does not know who is sitting out tonight.');
     // Sensitivity band: shift expected margin by a rating-uncertainty amount. Heuristic, not a calibrated CI.
     const ratingSd = 2.5 + 3.5 * Math.exp(-minGames / 10);
     const z = res.impliedMargin / pregameModel.marginSd;
@@ -123,7 +136,7 @@ export function createPredictor(pregameModel, liveModel) {
   return {
     predict(g, opts = {}) {
       if (g.league !== 'nba') return { league: g.league, pregame: { available: false, blockers: ['NBA-only model in this version'] }, live: { available: false, why: 'NBA-only model in this version' } };
-      const pregame = opts.syntheticPrior ? { available: false, synthetic: true, blockers: ['Synthetic demo team: no real ratings'], prior: opts.syntheticPrior, evidence: [], warnings: [] } : pregameFor(g);
+      const pregame = opts.syntheticPrior ? { available: false, synthetic: true, blockers: ['Synthetic demo team: no real ratings'], prior: opts.syntheticPrior, evidence: [], warnings: [] } : pregameFor(g, opts.out || null);
       const prior = pregame.prior && (pregame.available || opts.syntheticPrior) ? pregame.prior : null;
       const live = liveFor(g, prior, opts);
       return { gameId: g.id, pregame, live, pregameModel: pregameModel?.modelVersion || null, liveModel: liveModel?.modelVersion || null };

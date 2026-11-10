@@ -1,0 +1,11 @@
+{
+  "name": "sportspilot",
+  "private": true,
+  "type": "module",
+  "description": "Root manifest so Netlify installs server-function dependencies. App lives in app/.",
+  "dependencies": {
+    "@netlify/blobs": "^11.1.9",
+    "web-push": "^4.0.0"
+  },
+  "engines": { "node": ">=20" }
+}

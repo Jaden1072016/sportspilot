@@ -237,3 +237,42 @@ test('props artifact: no market inputs, validated, players have rates', () => {
   assert.ok(card.stats.points.ladder.every((x, i, arr) => i === 0 || x.p <= arr[i - 1].p));
   assert.ok(sizeFor(pm.dispersion.points, 20) > 0);
 });
+
+import { normalizeInjuries } from '../lib/sports.mjs';
+import { normalizeEventDetail, feeFractionOfStake } from '../lib/market.mjs';
+test('injuries: live ESPN shape parses ids from player links; Out flagged', () => {
+  const raw = { injuries: [{ id: '1', displayName: 'Atlanta Hawks', injuries: [{ status: 'Out', type: { name: 'INJURY_STATUS_OUT' }, athlete: { displayName: 'Asa Newell', links: [{ href: 'https://www.espn.com/nba/player/_/id/4873201/asa-newell' }], team: { id: '1' } }, details: { returnDate: '2026-11-13' } }, { status: 'Day-To-Day', athlete: { displayName: 'X', links: [{ href: 'https://www.espn.com/nba/player/_/id/9/x' }] } }] }] };
+  const r = normalizeInjuries(raw);
+  assert.equal(r.players[0].athleteId, '4873201'); assert.equal(r.players[0].out, true); assert.equal(r.players[1].out, false);
+  assert.throws(() => normalizeInjuries({}));
+});
+test('event detail: props parsed with stat/line/prices; fee coefficient read', () => {
+  const raw = { event: { slug: 'nba-a-b', markets: [{ slug: 'ml', sportsMarketTypeV2: 'SPORTS_MARKET_TYPE_MONEYLINE', feeCoefficient: 0.095 },
+    { slug: 'p1', sportsMarketTypeV2: 'SPORTS_MARKET_TYPE_PROP', feeCoefficient: 0.095, line: 15, metadata: { playerName: 'Jalen Brunson', statLabel: 'Pts' }, bestBidQuote: { value: '0.48' }, bestAskQuote: { value: '0.94' }, marketSides: [{ team: { name: 'New York Knicks' } }] }] } };
+  const r = normalizeEventDetail(raw);
+  assert.equal(r.props.length, 1); assert.equal(r.props[0].stat, 'points'); assert.equal(r.props[0].ask, 0.94); assert.equal(r.feeCoefficient, 0.095);
+  assert.ok(Math.abs(feeFractionOfStake(0.095, 0.10) - 0.0855) < 1e-9);
+});
+test('predictor: injury report switches to lineup-aware model and names missing players', () => {
+  const t = realTeams[0].id, rot = pregameModel.rotations[t];
+  const out = new Set([String(rot[0].id)]);
+  const r = predictor.predict(mkGame({ status: 'pre', id: 'inj1' }), { out });
+  assert.match(r.pregame.variant, /lineup/);
+  assert.ok(r.pregame.evidence.some(e => e.includes(rot[0].name)));
+  const base = predictor.predict(mkGame({ status: 'pre', id: 'inj2' }));
+  assert.ok(r.pregame.homeProbability < base.pregame.homeProbability + 0.05);
+});
+
+import { gameFindings, shouldSend, allowedPushEndpoint, inGameWindow } from '../lib/alerts.mjs';
+test('alerts: comeback notice only for a real chance, dedupe window, push endpoint allowlist, game hours', () => {
+  const g = { id: '9', home: { abbr: 'H', score: 60 }, away: { abbr: 'A', score: 70 }, status: 'in', statusText: 'Q3 6:00' };
+  const f = gameFindings(g, { live: { available: true, homeProbability: 0.3 }, pregame: { available: true, homeProbability: 0.6 } });
+  assert.ok(f.some(x => x.type === 'comeback')); assert.ok(f.some(x => x.type === 'swing'));
+  assert.equal(gameFindings(g, { live: { available: true, homeProbability: 0.05 }, pregame: { available: false } }).length, 0);
+  assert.equal(shouldSend(1000, 1000 + 60_000), false); assert.equal(shouldSend(NaN, 5), true);
+  assert.equal(allowedPushEndpoint('https://web.push.apple.com/abc'), true);
+  assert.equal(allowedPushEndpoint('https://evil.example.com/push'), false);
+  assert.equal(inGameWindow(new Date('2026-11-11T01:00:00Z')), true);   // 8pm ET Tue
+  assert.equal(inGameWindow(new Date('2026-11-10T15:00:00Z')), false);  // 10am ET Tue
+  assert.equal(inGameWindow(new Date('2026-11-14T18:00:00Z')), true);   // 1pm ET Sat
+});
