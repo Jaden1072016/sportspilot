@@ -1,4 +1,32 @@
-# Root-level Netlify config so deploys work even if "Base directory" is left blank.
-# The real build settings live in app/netlify.toml.
+# Works with Netlify's "Base directory" left blank (repo root).
+# If Base directory is set to "app", Netlify uses app/netlify.toml instead; both are equivalent.
 [build]
-  base = "app"
+  command = "node app/scripts/build.mjs"
+  publish = "app/dist"
+  functions = "app/netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/:name"
+  to = "/.netlify/functions/:name"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=()"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"
