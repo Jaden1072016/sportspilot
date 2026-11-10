@@ -1,0 +1,4 @@
+# Root-level Netlify config so deploys work even if "Base directory" is left blank.
+# The real build settings live in app/netlify.toml.
+[build]
+  base = "app"
