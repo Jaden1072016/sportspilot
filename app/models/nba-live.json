@@ -1,0 +1,105 @@
+{
+ "modelVersion": "NBA-LIVE-v1.0",
+ "createdAt": "2026-11-09T22:11:25.705Z",
+ "marketInputs": "NONE",
+ "params": {
+  "kappa": 0.15,
+  "s0": 0,
+  "sigmaRef": 15,
+  "ftPct": 0.775,
+  "foulWindow": 50,
+  "basePpp": 1.14,
+  "aSigma": 18,
+  "aKappa": 0.6,
+  "aS0": 0,
+  "aLate": 1.5
+ },
+ "mcCalibration": [
+  0.052025809310118507,
+  0.7374888141167378,
+  0.2517464500764716
+ ],
+ "defaultEngine": "ensemble",
+ "defaultSims": 4000,
+ "validation": {
+  "trainSeasons": [
+   2019,
+   2020,
+   2021,
+   2022
+  ],
+  "testStates": 20000,
+  "evalSims": 1000,
+  "engines": {
+   "pLegacy": {
+    "label": "Legacy v0.1 score/clock/record baseline",
+    "n": 20000,
+    "brier": 0.12457156978154418,
+    "logLoss": 0.3747152328271197,
+    "accuracy": 0.80925,
+    "ece": 0.02708257856597668
+   },
+   "pNoPrior": {
+    "label": "Score + clock only (no team strength)",
+    "n": 20000,
+    "brier": 0.12927315442908854,
+    "logLoss": 0.3839531259787854,
+    "accuracy": 0.79905,
+    "ece": 0.02646960278800524
+   },
+   "pAn": {
+    "label": "Analytic OU model with SportsPilot prior",
+    "n": 20000,
+    "brier": 0.11993391464957746,
+    "logLoss": 0.3615013165319831,
+    "accuracy": 0.8194,
+    "ece": 0.011749162845338125
+   },
+   "pMcRaw": {
+    "label": "Possession Monte Carlo (raw)",
+    "n": 20000,
+    "brier": 0.12056775640000633,
+    "logLoss": 0.3643170107287603,
+    "accuracy": 0.8169218452917042,
+    "ece": 0.018613699999980797
+   },
+   "pMc": {
+    "label": "Possession Monte Carlo (calibrated)",
+    "n": 20000,
+    "brier": 0.12002878355524997,
+    "logLoss": 0.3623753342422136,
+    "accuracy": 0.81725,
+    "ece": 0.006514140409080621
+   },
+   "pEns": {
+    "label": "Ensemble: mean of calibrated MC and analytic",
+    "n": 20000,
+    "brier": 0.11983177090716388,
+    "logLoss": 0.3613628248289889,
+    "accuracy": 0.81815,
+    "ece": 0.009036362068217028
+   }
+  },
+  "vsLegacy": {
+   "mean": -0.01233989858490614,
+   "ci95": [
+    -0.014472736236991801,
+    -0.010018754135795782
+   ]
+  },
+  "vsNoPrior": {
+   "mean": -0.021577791736571816,
+   "ci95": [
+    -0.02372440621924926,
+    -0.018869738022100402
+   ]
+  },
+  "vsAnalytic": {
+   "mean": 0.0008740177102304902,
+   "ci95": [
+    -0.00000956531596346677,
+    0.0017515772637741733
+   ]
+  }
+ }
+}

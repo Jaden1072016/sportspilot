@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0B1020" />
+  <meta name="description" content="SportsPilot independent sports intelligence research terminal. Read-only, with live sources and explicit validation warnings." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="/assets/icon-192.png" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>SportsPilot · NBA intelligence terminal</title>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#overview" aria-label="SportsPilot home">
+        <span class="brand-icon"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M9 31l9-22 7 14 7-15" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/><circle cx="30" cy="30" r="4" fill="currentColor"/></svg></span>
+        <span class="brand-word">SPORTS<span>PILOT</span><small>INTELLIGENCE TERMINAL</small></span>
+      </a>
+      <div class="menu-label">WORKSPACE</div>
+      <nav id="mainNav">
+          <button class="nav-link active" data-page="overview"><span class="nav-symbol">◫</span><span class="nav-label">Dashboard</span><span class="nav-short">Home</span></button>
+          <button class="nav-link" data-page="live"><span class="nav-symbol">◉</span><span class="nav-label">Live games</span><span class="nav-short">Live</span> <span class="nav-suffix" id="liveCount">0</span></button>
+          <button class="nav-link" data-page="players"><span class="nav-symbol">◎</span><span class="nav-label">Players</span><span class="nav-short">Players</span></button>
+          <button class="nav-link" data-page="opportunities"><span class="nav-symbol">▥</span><span class="nav-label">Compare prices</span><span class="nav-short">Prices</span></button>
+          <button class="nav-link" data-page="parlays"><span class="nav-symbol">▱</span><span class="nav-label">Parlay calculator</span><span class="nav-short">Parlays</span></button>
+          <button class="nav-link" data-page="performance"><span class="nav-symbol">▤</span><span class="nav-label">Results</span><span class="nav-short">Results</span></button>
+        </nav>
+      <div class="menu-label label-tools">SYSTEM</div>
+      <nav><button class="nav-link" data-page="settings"><span class="nav-symbol">⚙</span><span class="nav-label">Alerts & settings</span><span class="nav-short">Settings</span></button></nav>
+      <div class="sidebar-foot">
+        <div class="system-dot"></div>
+        <div><strong>RESEARCH BUILD v0.2</strong><small>No live order execution</small></div>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar">
+        <div class="topbar-left"><span class="eyebrow">SPORTS INTELLIGENCE</span><span class="topbar-divider">/</span><span id="currentPageLabel">Overview</span></div>
+        <div class="topbar-right">
+          <span class="source-label" id="sourceStatus"><span class="status-indicator muted"></span> Connecting</span>
+          <button class="icon-button" id="refreshBtn" title="Refresh free feeds" aria-label="Refresh live data">↻</button>
+          <button class="avatar" id="settingsQuick" title="Settings" aria-label="Settings">SP</button>
+        </div>
+      </header>
+
+      <main class="content" id="mainContent">
+        <section class="hero">
+          <div class="hero-lines"></div>
+          <div class="hero-copy">
+            <div class="hero-kicker"><span class="pulse-dot"></span> INDEPENDENT INTELLIGENCE ENGINE <span class="hero-version">/ V0.2</span></div>
+            <h1>See the game.<br /><em>Find the edge.</em></h1>
+            <p>Our own NBA predictions: who is likely to win and why, in plain numbers. Then we check whether Polymarket's price is off.</p>
+            <div class="hero-actions"><button class="primary-btn" data-page="live">Explore live games <span>↗</span></button><button class="secondary-btn" data-page="parlays">Open parlay lab</button></div>
+          </div>
+          <div class="hero-ball" aria-hidden="true"><div class="ball-groove groove-one"></div><div class="ball-groove groove-two"></div><div class="ball-groove groove-three"></div></div>
+        </section>
+
+        <div class="control-row">
+          <div class="segment" role="group" aria-label="Sport"><button class="segment-btn active" data-sport="nba">◉ NBA</button><button class="segment-btn" data-sport="nfl">NFL</button><button class="segment-btn" data-sport="mlb">MLB</button></div>
+          <div class="segment data-toggle" role="group" aria-label="Data mode"><button class="segment-btn active" data-mode="live">LIVE DATA</button><button class="segment-btn" data-mode="demo">DEMO</button></div>
+        </div>
+
+        <div id="noticeArea" aria-live="polite"></div>
+        <div id="pageBody" aria-live="polite"></div>
+      </main>
+      <footer class="footer">SPORTSPILOT LABS <span>•</span> Models validated on historical data; research status until paper-trading evidence exists <span>•</span> No automatic orders <span>•</span> Not affiliated with the NBA, ESPN or Polymarket</footer>
+    </div>
+  </div>
+  <div id="toast" role="status" aria-live="polite" class="toast" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

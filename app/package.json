@@ -1,0 +1,21 @@
+{
+  "name": "sportspilot-research-terminal",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Free-data, read-only sports intelligence research terminal; no live order execution",
+  "scripts": {
+    "dev": "node scripts/local.mjs",
+    "dev:netlify": "netlify dev",
+    "test": "node --test tests/*.test.mjs",
+    "test:smoke": "node scripts/smoke.mjs",
+    "build": "node scripts/build.mjs",
+    "verify:live": "node scripts/verify-live.mjs",
+    "model:pregame": "node scripts/nba/train-pregame.mjs",
+    "model:live": "node scripts/nba/validate-live.mjs",
+    "model:all": "node scripts/nba/train-pregame.mjs && node scripts/nba/validate-live.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
