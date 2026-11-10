@@ -70,6 +70,6 @@ export function jsonResponse(payload, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...extraHeaders } });
 }
 export function errorResponse(err, source = 'unknown') {
-  const status = err?.status === 429 ? 429 : 503;
+  const status = err?.status === 429 ? 429 : /^(Invalid|Unsupported)/.test(String(err?.message || '')) ? 400 : 503;
   return jsonResponse({ ok: false, source, error: String(err?.message || 'Data source unavailable'), fetchedAt: isoNow(), liveData: false }, status);
 }

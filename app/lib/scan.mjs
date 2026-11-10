@@ -64,7 +64,7 @@ export async function sendTest(endpoint) {
 /** One scan: throttled to once a minute, only in game windows unless forced. */
 export async function runScan({ force = false, dry = false, now = Date.now() } = {}) {
   const s = store();
-  await s.set('scan/heartbeat', new Date(now).toISOString()); // proves the schedule fires, even off-hours
+  if (!dry) await s.set('scan/heartbeat', new Date(now).toISOString()); // proves the schedule fires, even off-hours
   if (dry) {
     const lastDry = Number(await s.get('scan/dryLast'));
     if (Number.isFinite(lastDry) && now - lastDry < 20_000) return { ran: false, reason: 'throttled' };
