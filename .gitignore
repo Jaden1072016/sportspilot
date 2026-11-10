@@ -5,7 +5,7 @@ app/dist/
 !.env.example
 # Rebuildable data (python3 pipeline/ingest_hoopr.py --download)
 data/raw/
-data/snapshot/
-data/derived/
+data/snapshot
+data/derived
 app/tests/fixtures/live/
 .DS_Store
