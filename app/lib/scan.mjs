@@ -62,23 +62,30 @@ export async function sendTest(endpoint) {
 }
 
 /** One scan: throttled to once a minute, only in game windows unless forced. */
-export async function runScan({ force = false, now = Date.now() } = {}) {
+export async function runScan({ force = false, dry = false, now = Date.now() } = {}) {
   const s = store();
+  await s.set('scan/heartbeat', new Date(now).toISOString()); // proves the schedule fires, even off-hours
+  if (dry) {
+    const lastDry = Number(await s.get('scan/dryLast'));
+    if (Number.isFinite(lastDry) && now - lastDry < 20_000) return { ran: false, reason: 'throttled' };
+    await s.set('scan/dryLast', String(now));
+  }
   if (!force && !inGameWindow(new Date(now))) return { ran: false, reason: 'outside game hours' };
   const last = Number(await s.get('scan/last'));
   if (!force && Number.isFinite(last) && now - last < 60_000) return { ran: false, reason: 'throttled' };
-  await s.set('scan/last', String(now));
+  if (!dry) await s.set('scan/last', String(now));
   const { data, fetchedAt } = await fetchJSON(scoreboardURL('nba'), { ttlMs: 0 });
   const games = normalizeScoreboard(data, 'nba', fetchedAt).games;
   const live = games.filter(g => g.status === 'in');
   const summary = { ran: true, at: new Date(now).toISOString(), live: live.length, findings: 0, sent: 0, subscribers: 0 };
-  await s.setJSON('scan/status', summary);
+  if (!dry) await s.setJSON('scan/status', summary);
   if (!live.length) return summary;
   let out = null;
   try { const inj = normalizeInjuries((await fetchJSON(injuriesURL('nba'), { ttlMs: 300_000 })).data); out = new Set(inj.players.filter(p => p.out).map(p => p.athleteId)); } catch { /* injuries optional */ }
   predictor ||= createPredictor(pregameModel, liveModel);
   const findings = live.flatMap(g => gameFindings(g, predictor.predict(g, { sims: 2000, out }))).filter(f => !f.quiet);
   summary.findings = findings.length;
+  if (dry) return { ...summary, dry: true, findings: findings.map(f => ({ title: f.title, body: f.body })) };
   if (!findings.length) { await s.setJSON('scan/status', summary); return summary; }
   await vapidKeys(s);
   const subs = await allSubs(s);
@@ -93,4 +100,7 @@ export async function runScan({ force = false, now = Date.now() } = {}) {
   return summary;
 }
 
-export async function scanStatus() { return (await store().get('scan/status', { type: 'json' })) || null; }
+export async function scanStatus() {
+  const s = store();
+  return { last: (await s.get('scan/status', { type: 'json' })) || null, heartbeat: (await s.get('scan/heartbeat')) || null };
+}

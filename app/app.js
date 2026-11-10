@@ -140,7 +140,7 @@ function sparkline(points, w = 560, h = 120) {
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="Home win probability over time, ${points.length} updates, latest ${pct(points.at(-1).p)}"><line x1="8" x2="${w - 8}" y1="${ys(0.5)}" y2="${ys(0.5)}" class="spark-mid"/><path d="${d}" class="spark-line"/><circle cx="${xs(points.length - 1)}" cy="${ys(points.at(-1).p)}" r="4" class="spark-dot"/><text x="8" y="${h - 2}" class="spark-label">${esc(points[0].label)}</text><text x="${w - 8}" y="${h - 2}" text-anchor="end" class="spark-label">${esc(points.at(-1).label)}</text></svg>`;
 }
 function findings() {
-  return currentGames().flatMap(g => gameFindings(g, predOf(g)).map(f => ({ g, text: f.text, key: f.key }))).slice(0, 5);
+  return currentGames().flatMap(g => gameFindings(g, predOf(g)).map(f => ({ g, text: f.text, key: f.key, quiet: Boolean(f.quiet) }))).slice(0, 5);
 }
 
 // ---------- pages ----------
@@ -453,7 +453,7 @@ function renderSettings() {
       ${pushHelp()}
       <div class="result-line"><span>Alerts on this device</span>${state.push.state === 'on' ? '<button class="sm-btn" data-push="off">Turn off</button>' : '<button class="sm-btn" data-push="on">Turn on</button>'}</div>
       <div class="result-line"><span>Test</span><button class="sm-btn" data-push="test" ${state.push.state === 'on' ? '' : 'disabled'}>Send me a test alert</button></div>
-      <div class="result-line"><span>Last background check</span><strong>${state.scanStatus?.at ? `${esc(ago(state.scanStatus.at))} · ${state.scanStatus.live} live` : 'not yet'}</strong></div>
+      <div class="result-line"><span>Last background check</span><strong>${state.scanStatus?.heartbeat ? `running · checked ${esc(ago(state.scanStatus.heartbeat))}` : 'not yet'}${state.scanStatus?.last?.at ? ` · last game scan ${esc(ago(state.scanStatus.last.at))} (${state.scanStatus.last.live} live)` : ''}</strong></div>
       <div class="result-line"><span>"Worth a look" alerts</span><span class="badge orange">AFTER PAPER TRADING</span></div></div></div></div>
     ${sectionHeader('Recent alerts', 'Since you opened the app.')}<div class="panel panel-pad">${state.alerts.length ? `<div class="data-list">${state.alerts.slice(0, 20).map(a => `<div class="data-row"><div><strong>${esc(a.title)}</strong><small>${esc(a.body)}</small></div><span class="badge ${a.kind === 'qualified' ? 'green' : ''}">${esc(a.kind.toUpperCase())} · ${esc(ago(a.at))}${Date.now() > a.expires ? ' · EXPIRED' : ''}</span></div>`).join('')}</div>` : '<p class="muted">No alerts yet.</p>'}</div>`;
 }
@@ -511,7 +511,7 @@ function maybeAlert(m, g, link, p, ev) {
 }
 function researchWatch() {
   if (!state.settings.researchWatch || isDemo()) return;
-  for (const f of findings()) raise('research', `rw|${f.g.id}|${f.text.slice(0, 40)}`, 'Game alert (not a bet)', f.text);
+  for (const f of findings()) if (!f.quiet) raise('research', `rw|${f.key}`, 'Game alert (not a bet)', f.text);
 }
 
 // ---------- data flow ----------
@@ -573,7 +573,14 @@ let booksBusy = false;
 async function refreshBooks() {
   if (booksBusy || isDemo()) return; booksBusy = true;
   try {
-    const slugs = flatMarkets().filter(m => { const l = linkFor(m); const g = l && currentGames().find(x => x.id === l.gameId); return g && g.status !== 'post'; }).map(m => m.slug).slice(0, 20);
+    const now = Date.now();
+    const slugs = flatMarkets().filter(m => {
+      const l = linkFor(m); const g = l && currentGames().find(x => x.id === l.gameId);
+      if (!g || g.status === 'post') return false;
+      const age = now - Date.parse(state.books[m.slug]?.fetchedAt || 0);
+      return age > (g.status === 'in' ? 20_000 : 120_000);
+    }).map(m => m.slug).slice(0, 20);
+    if (!slugs.length) return;
     for (const slug of slugs) {
       try { state.books[slug] = await fetchAPI(`/api/book?slug=${encodeURIComponent(slug)}`); } catch (e) { state.books[slug] = { error: e.message }; }
     }
