@@ -11,8 +11,8 @@ Status key: **Implemented** (code exists) / **Tested offline** (automated tests 
 | Pregame win model NBA-PREGAME-v1.0 | Yes | Yes, season walk-forward 2019-2027 | No | Trails sportsbook line on average; research status |
 | Lineup-aware pregame variant | Yes (trained) | Yes (lineup-confirmed scenario) | No | Needs verified inactive/injury feed; not used live |
 | Live win model NBA-LIVE-v1.0 (MC + closed form ensemble) | Yes | Yes, 20k held-out states 2023-2027 | No | No on-court/foul/possession inputs; research status |
-| ESPN scoreboard / summary adapters | Yes (clock, halftime, possession, injuries) | Yes (fixtures) | **No** (blocked in build sandbox) | Run `npm run verify:live` |
-| Polymarket US events / BBO / order book adapters | Yes (SDK-aligned schemas) | Yes (fixtures) | **No** | Run `npm run verify:live`; confirm event route |
+| ESPN scoreboard / summary adapters | Yes (clock, halftime, possession, injuries) | Yes (fixtures) | **Scoreboard yes** (deployed site, 2026-11-10); summary not yet | Live in-game states not yet observed |
+| Polymarket US events / BBO / order book adapters | Yes (SDK-aligned schemas) | Yes (fixtures) | **Yes** (deployed site, 2026-11-10): `/v2/leagues/nba/events`, book with OPEN state + transactTime, BBO without timestamp as expected | |
 | Size-weighted fill, YES/NO side math | Yes | Yes | No | |
 | Opportunity gate (fail-closed, named blockers) | Yes | Yes | n/a | Fees unverified; model research status |
 | Manual contract-to-game mapping with provenance | Yes (local, timestamped) | UI test | No | Automatic mapping not built |
@@ -27,8 +27,9 @@ Status key: **Implemented** (code exists) / **Tested offline** (automated tests 
 | PWA shell, offline handling, CSP, dist-only publishing | Yes | UI test at 390px and 1440px | Not on a real iPhone | Test on device after deploy |
 
 ## Next priorities (in order)
-1. [ ] **Run `cd app && npm run verify:live` on your machine** and send me `tests/fixtures/live/<date>/verify-report.json`. Turns every "Live verified: No" for ESPN/Polymarket into evidence and fixes any schema gaps.
-2. [ ] Deploy to Netlify; confirm functions and `/api/health`; install on iPhone.
+1. [x] Deployed: https://dulcet-rugelach-79bef5.netlify.app (Netlify, from GitHub Jaden1072016/sportspilot). Functions and feeds verified live.
+2. [ ] Watch a live game on the deployed site: confirm in-game clock parsing, live picks, box score + injuries block.
+2b. [ ] Install on iPhone (Safari, Add to Home Screen) and check layout on device.
 3. [ ] Daily rating refresh without Python: Node catch-up from ESPN `scoreboard?dates=` for games after the snapshot (adapter already supports `date`).
 4. [ ] Verified injury/inactive feed (ESPN summary `injuries` block, fail-closed) so the lineup-aware model (log loss 0.612 vs 0.622) can run live.
 5. [ ] Phase 4: player minutes model + count distributions (negative binomial vs Poisson vs empirical) for PTS/REB/AST/3PM, validated by threshold and role.
@@ -36,6 +37,11 @@ Status key: **Implemented** (code exists) / **Tested offline** (automated tests 
 7. [ ] Verify Polymarket US fee schedule from the official source; mark fee verified only then.
 8. [ ] Server-side scanner (user-owned computer or free scheduled job) + VAPID web push + iPhone end-to-end test.
 9. [ ] Promote model out of RESEARCH status only after prospective paper results with honest intervals (see ACCEPTANCE_GATES.md).
+
+## Live findings 2026-11-10
+- Polymarket NBA moneyline = ONE market per game with two sides (marketSides). The order book prices the FIRST listed side; the second side is 1 - bid. Verified against polymarket.us page (Bucks 10% = 10c ask, Knicks 91%). Compare screen now evaluates both teams.
+- Polymarket `gameId` is not the ESPN event id; matching is by full team name (suggested) plus user confirmation.
+- Netlify team default made the project private and the first deploy skipped the build; root netlify.toml now carries full build settings.
 
 ## Done in v0.2
 - [x] Audit of starter; 11 original tests preserved (one fixture updated to include team ids, now required).
