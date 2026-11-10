@@ -1,15 +1,18 @@
-# Build verification report: v0.2, 2026-11-09
+# Build verification: v0.5, 2026-11-10
 
-## Executed in the Claude build workspace
-- `npm test`: 39 tests pass (11 original + 28 new): clock parsing, scoreboard ids/possession, injuries fail-closed, order-book size-weighted fills, YES/NO side math, insufficient depth, opportunity gate blockers, correlated-parlay joint (80% not 64%), as-of ratings, seeded simulation reproducibility, end-of-game and overtime boundaries, halftime/end-of-period mapping, unknown-team and stale-rating blocks, static check that model code never imports market code, artifacts declare no market inputs, logistic regression recovery, HTTP retry/cache/fail-closed.
-- `npm run model:all`: rebuilt both model artifacts from the 2026-11-09 data snapshot. Reports: `docs/reports/nba-pregame-validation.md`, `docs/reports/nba-live-validation.md`.
-- Headless Chrome (real app via `scripts/local.mjs`) at 1440x900 and 390x844: every page, demo game model, sample order book, contract mapping, opportunity blockers, paper position settle, settings save, demo-to-live switch. No JavaScript errors; no synthetic data leaked into live mode; no horizontal overflow on iPhone width.
-- Local server: `/api/health` OK; model files served; data, scripts and server files return 404.
+## Automated
+- `cd app && npm test`: 46 tests pass (data adapters, order-book math, opportunity gate, ratings as-of, live simulator, props distributions, injuries, Polymarket event props, alert rules, HTTP resilience, model/market separation).
+- Headless browser (desktop 1440 and iPhone 390): every page, demo flow, opportunity blockers, paper trade settle, settings save, Back button and #page links, demo/live isolation. No JS errors, no horizontal overflow.
 
-## Not verified (and why)
-- ESPN and Polymarket US live endpoints: the build workspace network only reaches GitHub and package registries. Polymarket schemas were aligned to the official `polymarket-us` SDK v2.4.1 type definitions instead. **Run `npm run verify:live` on your machine.**
-- Netlify deploy, real iPhone install, real notifications, background push.
-- Any profitable edge. Validation shows calibration and accuracy, not returns against executable prices.
+## Live (deployed site https://dulcet-rugelach-79bef5.netlify.app)
+- ESPN scoreboard (today + tomorrow), box score (26 players + injuries block), injury report (94 entries): working.
+- Polymarket US: league events, order book with OPEN state + exchange timestamp, event props (298 for BOS at PHI) with fee coefficient: working.
+- Moneyline side mapping confirmed against polymarket.us page (first listed side = order book YES).
+- Background scanner: scheduled function heartbeat advancing every 2 minutes; dry run returns cleanly. Push keys stored in Netlify Blobs; invalid subscription hosts rejected.
+- Daily data refresh (GitHub Actions): first run succeeded, committed models with data through 2026-11-09, Netlify redeployed.
+- iPhone layout (375 wide): all 7 pages, no overflow.
 
-## Release state
-RESEARCH. Independent models validated on history; not cleared for real-money signals.
+## Not yet verified
+- A live in-progress NBA game on the deployed site (first chance: tonight 7:30 pm ET).
+- Push notification delivery to a real iPhone (needs the user's device).
+- Any profitable edge (requires prospective paper trading).
