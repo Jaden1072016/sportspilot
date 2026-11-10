@@ -1,7 +1,7 @@
 // Single entry point: ESPN-normalized game + model artifacts -> independent forecast.
 // Pure and deterministic (seeded). Imports no market code. Used by the browser and by
 // any future server-side scanner so both produce identical numbers.
-import { restoreRatings, preGame } from './ratings.mjs';
+import { restoreRatings, preGame, postGame } from './ratings.mjs';
 import { pregameFeatures, pregameProbability } from './pregame.mjs';
 import { simulateLive, analyticLive, calibrateLive, timeState } from './live.mjs';
 
@@ -40,6 +40,7 @@ export function liveStateFromGame(g) {
 export function createPredictor(pregameModel, liveModel) {
   const ratings = pregameModel ? restoreRatings(pregameModel.ratings) : null;
   const cache = new Map();
+  const applied = new Set();
 
   function pregameFor(g) {
     const out = { available: false, evidence: [], warnings: [], blockers: [] };
@@ -127,7 +128,26 @@ export function createPredictor(pregameModel, liveModel) {
       const live = liveFor(g, prior, opts);
       return { gameId: g.id, pregame, live, pregameModel: pregameModel?.modelVersion || null, liveModel: liveModel?.modelVersion || null };
     },
-    ratingsAsOf: ratings?.lastGameDate || null,
+    get ratingsAsOf() { return ratings?.lastGameDate || null; },
+    /**
+     * Bring ratings up to date with completed games played after the snapshot (scores only).
+     * Only games on dates strictly before `beforeDate` (US/Eastern) are applied, so a game's own
+     * result can never feed its own pregame pick. Returns the number of games applied.
+     */
+    applyResults(games, beforeDate) {
+      if (!ratings) return 0;
+      const done = games.filter(g => g.league === 'nba' && g.completed && Number.isFinite(g.home.score) && Number.isFinite(g.away.score) && g.home.score !== g.away.score)
+        .map(g => ({ g, date: easternDate(g.startTime) }))
+        .filter(x => x.date && x.date > ratings.lastGameDate && x.date < beforeDate && !applied.has(x.g.id) && ratings.teams.has(Number(x.g.home.id)) && ratings.teams.has(Number(x.g.away.id)))
+        .sort((a, b) => (a.g.startTime < b.g.startTime ? -1 : 1));
+      for (const { g, date } of done) {
+        const game = { season: ratings.season, homeId: Number(g.home.id), awayId: Number(g.away.id), date, neutral: Boolean(g.neutralSite), homeScore: g.home.score, awayScore: g.away.score, homePoss: NaN, awayPoss: NaN };
+        postGame(ratings, game, preGame(ratings, game));
+        applied.add(g.id);
+      }
+      if (done.length) cache.clear();
+      return done.length;
+    },
   };
 }
 

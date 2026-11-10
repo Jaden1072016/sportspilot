@@ -21,7 +21,7 @@ const state = {
   page: 'overview', sport: 'nba', mode: 'live', scores: null, markets: null, scoresError: null, marketsError: null, books: {}, selectedGame: null, details: {}, loading: true, lastRefresh: null,
   models: { pregame: null, live: null, error: null }, predictor: null, preds: {}, history: {},
   legs: safeRead('legs', [{ id: 1, label: 'Hypothetical selection A', p: .60, multiplier: 1.50 }, { id: 2, label: 'Hypothetical selection B', p: .50, multiplier: 2.10 }]),
-  journal: safeRead('journal', []), links: safeRead('links', {}), predLog: safeRead('predlog', {}),
+  journal: safeRead('journal', []), links: safeRead('links', {}), autoLinks: {}, caughtUpFor: null, predLog: safeRead('predlog', {}),
   settings: { ...DEFAULT_SETTINGS, ...safeRead('settings', {}) }, alerts: [], alertSeen: new Map(), playerTeam: null, playerQuery: '', online: navigator.onLine,
 };
 let toastTimer = null;
@@ -33,6 +33,28 @@ const currentGames = () => state.scores?.games || [];
 const currentEvents = () => state.markets?.events || [];
 const flatMarkets = () => currentEvents().flatMap(e => (e.markets || []).map(m => ({ ...m, eventName: e.name, eventLive: e.live })));
 const isDemo = () => state.mode === 'demo';
+const etISO = (offsetDays = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() + offsetDays * 86400000));
+const ymd = iso => iso.replaceAll('-', '');
+const ORDER = { in: 0, pre: 1, post: 2 };
+function mergeGames(lists) {
+  const by = new Map();
+  for (const l of lists) for (const g of (l?.games || [])) by.set(g.id, g);
+  return [...by.values()].sort((a, b) => (ORDER[a.status] ?? 3) - (ORDER[b.status] ?? 3) || String(a.startTime).localeCompare(String(b.startTime)));
+}
+/** Auto-match a two-sided Polymarket moneyline to an ESPN game: both team nicknames + tip time within 3h. */
+function matchMarket(m, ev, games) {
+  const sides = (m.marketSides || []).map(x => String(x.description || '').toLowerCase().trim()).filter(Boolean);
+  if (sides.length !== 2) return null;
+  const t = Date.parse(ev?.startTime || '');
+  const ends = (name, nick) => name.toLowerCase().endsWith(nick);
+  const timeOk = g => (Number.isFinite(t) ? Math.abs(Date.parse(g.startTime) - t) <= 3 * 3600e3 : !g.startTime && isDemo());
+  const hits = games.filter(g => g.league === 'nba' && timeOk(g) &&
+    ((ends(g.home.name, sides[0]) && ends(g.away.name, sides[1])) || (ends(g.away.name, sides[0]) && ends(g.home.name, sides[1]))));
+  if (hits.length !== 1) return null; // ambiguous or none: never guess
+  const g = hits[0];
+  return { gameId: g.id, team: ends(g.home.name, sides[0]) ? 'home' : 'away', by: 'auto', rule: 'team nicknames + tip time', at: new Date().toISOString() };
+}
+const linkFor = m => state.links[m.slug] || state.autoLinks[m.slug] || null;
 const nbaTeams = () => (state.models.pregame?.ratings.teams || []).filter(t => t.id >= 1 && t.id <= 30).sort((a, b) => a.abbr.localeCompare(b.abbr));
 
 // ---------- model loading & prediction ----------
@@ -86,7 +108,7 @@ function renderNotice() {
   if (state.marketsError) issues.push(`Market feed: ${esc(state.marketsError)}`);
   if (issues.length) return `<div class="notice warn"><strong>Some data didn't load.</strong> ${issues.join(' · ')} <span class="notice-right">We never fill gaps with made-up data.</span></div>`;
   if (state.loading) return `<div class="notice"><strong>Loading…</strong> Getting scores from ESPN and markets from Polymarket.</div>`;
-  return `<div class="notice"><strong>Testing mode.</strong> These are our own predictions, checked against past seasons. Not cleared for real money yet. <span class="notice-right">Scores ${esc(ago(state.scores?.fetchedAt))}</span></div>`;
+  return `<div class="notice"><strong>Our own picks.</strong> Checked on past seasons. Bets are only flagged after paper trading proves them. <span class="notice-right">Scores ${esc(ago(state.scores?.fetchedAt))}</span></div>`;
 }
 function help(items) { return `<details class="help"><summary>ⓘ What am I looking at?</summary><ul>${items.map(x => `<li>${x}</li>`).join('')}</ul></details>`; }
 function sectionHeader(title, sub = '', action = '') { return `<div class="page-title-row"><div><h2>${title}</h2><p>${sub}</p></div>${action}</div>`; }
@@ -134,7 +156,7 @@ function renderOverview() {
   const pv = state.models.pregame?.validation, lv = state.models.live?.validation;
   const f = findings();
   const gate = (n, label, status, cls) => `<div class="reason"><span class="tick">${n}</span><span class="grow">${label}</span><span class="badge ${cls}">${status}</span></div>`;
-  return `<div class="stats-grid">${statCard('LIVE NOW', state.loading ? '…' : live, isDemo() ? 'Demo games' : `${games.length} games today`, live ? 'green' : '', '◉')}${statCard('POLYMARKET MARKETS', state.loading ? '…' : marketCount, isDemo() ? 'Made-up sample markets' : 'Open to look at, not bets', '', '▥')}${statCard('MODEL STATUS', 'TESTING', pv ? `Checked on ${pv.n.toLocaleString()} past games. Not for real money yet.` : 'Model files not loaded', 'orange', '◇')}${statCard('AUTO-TRADING', 'OFF', 'You place every trade yourself', 'orange', '⊘')}</div>
+  return `<div class="stats-grid">${statCard('LIVE NOW', state.loading ? '…' : live, isDemo() ? 'Demo games' : `${games.length} games today`, live ? 'green' : '', '◉')}${statCard('POLYMARKET MARKETS', state.loading ? '…' : marketCount, isDemo() ? 'Made-up sample markets' : 'Open to look at, not bets', '', '▥')}${statCard('MODEL', 'v1', pv ? `Checked on ${pv.n.toLocaleString()} past games` : 'Model files not loaded', '', '◇')}${statCard('AUTO-TRADING', 'OFF', 'You place every trade yourself', 'orange', '⊘')}</div>
     ${help(['Each card is one game. The green or orange tag shows <b>which team we think wins and how likely</b>, e.g. "BOS 64% to win".', 'These chances come from our own models, not from Polymarket prices.', '<b>Model findings</b> points out games worth a closer look. They are not bets.', '<b>Before real-money use</b> is the checklist the app must pass before it will ever flag a bet.'])}${sectionHeader('Tonight’s games', 'Tap a game to see the full breakdown.', `<button class="sm-btn" data-page="live">All games ↗</button>`)}
     <div class="panel-layout"><div class="panel"><div class="panel-head"><div><div class="panel-title">${esc(state.sport.toUpperCase())} game center</div><span class="panel-sub">${isDemo() ? 'Demo games' : `Scores from ESPN · updated ${esc(ago(state.scores?.fetchedAt))}`}</span></div><span class="badge">${isDemo() ? 'DEMO' : 'LIVE DATA'}</span></div><div class="panel-pad">${state.sport === 'nba' ? gamesPanel() : emptyBlock(`${state.sport.toUpperCase()} model not built yet`, 'NBA is the priority. NFL and MLB get their own models (drives/clock, pitchers/bullpens) in later phases. Scores still load in Live games.')}</div></div>
       <div class="stack"><div class="signal-box"><div class="signal-icon">◈</div><h3>Model findings</h3>${f.length ? f.map(x => `<button class="finding" data-game="${esc(x.g.id)}">${esc(x.text)}</button>`).join('') : `<p>Nothing notable right now. This lists games where a losing team still has a real chance, a game has swung a lot, or a matchup is close to 50/50.</p>`}<div class="line"></div><div class="badge orange">FOR RESEARCH, NOT BETS</div></div>
@@ -186,7 +208,7 @@ function modelPanel(g) {
 function renderLive() {
   const games = currentGames();
   const chosen = games.find(g => g.id === state.selectedGame) || games.find(g => g.status === 'in') || games[0];
-  return `${sectionHeader('Live games', 'Tap any game to see our pick and why.', `<span class="badge orange">TESTING</span>`)}${help(['<b>Chance to win right now</b>: how likely each team is to win from here, based on the score, time left and how good each team is.', '<b>Likely range</b>: our best guess is not exact. The real chance is probably inside this range.', '<b>Why</b>: the main reasons behind the number, in plain words.', '<b>Before the game</b>: what we thought before tip-off. Compare it with the live number to see how much the game has changed.', '<b>What the model can\'t see</b>: things it doesn\'t know yet (like foul trouble). Keep these in mind yourself.'])}<div class="panel panel-pad">${gamesPanel(30)}</div>${sectionHeader('Game breakdown', 'Our pick, the reasons, and what we can\'t see.')}${modelPanel(chosen)}`;
+  return `${sectionHeader('Games', 'Tonight and tomorrow. Tap any game for our pick and why.')}${help(['<b>Chance to win right now</b>: how likely each team is to win from here, based on the score, time left and how good each team is.', '<b>Likely range</b>: our best guess is not exact. The real chance is probably inside this range.', '<b>Why</b>: the main reasons behind the number, in plain words.', '<b>Before the game</b>: what we thought before tip-off. Compare it with the live number to see how much the game has changed.', '<b>What the model can\'t see</b>: things it doesn\'t know yet (like foul trouble). Keep these in mind yourself.'])}<div class="panel panel-pad">${gamesPanel(30)}</div>${sectionHeader('Game breakdown', 'Our pick, the reasons, and what we can\'t see.')}${modelPanel(chosen)}`;
 }
 
 function renderPlayers() {
@@ -243,46 +265,44 @@ function sideResult(label, abbr, p, pLow, fill, b, srcKind) {
     ${ev.blockers.length ? `<details class="drill"><summary>Why not (${ev.blockers.length})</summary><ul class="blockers">${ev.blockers.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}</div>`;
   return { ev, html };
 }
-function opportunityCard(m) {
-  const games = currentGames().filter(g => g.league === 'nba');
-  const link = state.links[m.slug], sug = link ? null : suggestLink(m, games), cur = link || sug, b = state.books[m.slug];
+function boardRow(m) {
+  const games = currentGames(), link = linkFor(m), b = state.books[m.slug];
   const [sideA, sideB] = sidesOf(m);
-  const gg = games.find(x => x.id === cur?.gameId);
-  const linkForm = `<form class="link-form" data-link-form="${esc(m.slug)}">${sug ? `<p class="muted small-note">We found a likely match. Check it, tick the box, and save.</p>` : ''}<div class="field"><label>1. Which game is this?</label><select name="gameId" required><option value="">Choose game…</option>${games.map(g => `<option value="${esc(g.id)}" ${cur?.gameId === g.id ? 'selected' : ''}>${esc(g.away.abbr)} at ${esc(g.home.abbr)}</option>`).join('')}</select></div><div class="field"><label>2. Polymarket's "${esc(sideA)}" is which team?</label><select name="team" required><option value="">Choose team…</option><option value="home" ${cur?.team === 'home' ? 'selected' : ''}>${gg ? esc(gg.home.abbr) : 'Home team'}</option><option value="away" ${cur?.team === 'away' ? 'selected' : ''}>${gg ? esc(gg.away.abbr) : 'Away team'}</option></select></div><div class="field"><label class="check"><input type="checkbox" name="confirm" required ${link ? 'checked' : ''}/> 3. I checked this on Polymarket (and its overtime rule)</label></div><div class="field"><button class="sm-btn" type="submit">${link ? 'Update match' : 'Save match'}</button></div></form>`;
-  let evalHtml = `<p class="muted small-note">Confirm the match (steps 1 to 3), then tap "Check price". We compare our chance with Polymarket's price for both teams.</p>`;
-  if (link) {
-    const g = games.find(x => x.id === link.gameId), r = g && predOf(g);
-    if (!g) evalHtml = `<div class="notice warn">The matched game is not on today's board.</div>`;
-    else {
-      const src = r?.live.available ? r.live : r?.pregame.available ? r.pregame : null, kind = r?.live.available ? 'live' : 'before tip-off';
-      const pA = src ? (link.team === 'home' ? src.homeProbability : src.awayProbability) : null;
-      const lowHome = src?.band?.low, highHome = src?.band?.high;
-      const pLowA = src?.band ? (link.team === 'home' ? lowHome : 1 - highHome) : null;
-      const pLowB = src?.band ? (link.team === 'home' ? 1 - highHome : lowHome) : null;
-      const okBook = b && !b.error;
-      const fillA = okBook ? executableFill(b, 'YES', state.settings.stake) : { ok: false, reason: 'Tap "Check price"' };
-      const fillB = okBook ? executableFill(b, 'NO', state.settings.stake) : { ok: false, reason: 'Tap "Check price"' };
-      const teamA = link.team === 'home' ? g.home.abbr : g.away.abbr, teamB = link.team === 'home' ? g.away.abbr : g.home.abbr;
-      const A = sideResult(sideA, teamA, pA, pLowA, fillA, b, kind), B = sideResult(sideB, teamB, pA === null ? null : 1 - pA, pLowB, fillB, b, kind);
-      maybeAlert(m, g, { ...link, label: teamA }, pA, A.ev); maybeAlert(m, g, { ...link, team: link.team === 'home' ? 'away' : 'home', label: teamB }, pA === null ? null : 1 - pA, B.ev);
-      evalHtml = `<div class="sides">${A.html}${B.html}</div>`;
-    }
-  }
-  return `<div class="panel opp"><div class="panel-head"><div><div class="panel-title">${esc(m.eventName || m.question)}</div><span class="panel-sub">Who wins · ${esc(sideA)} vs ${esc(sideB)}</span></div><div class="row-actions"><div style="text-align:right">${bookCell(m)}</div><button class="sm-btn" data-book="${esc(m.slug)}">${isDemo() ? 'Sample price' : 'Check price'}</button></div></div><div class="panel-pad two-up">${linkForm}<div>${evalHtml}</div></div></div>`;
+  const g = link && games.find(x => x.id === link.gameId);
+  if (!g) return null;
+  const r = predOf(g);
+  const src = r?.live.available ? r.live : r?.pregame.available ? r.pregame : null, kind = r?.live.available ? 'live' : 'pregame';
+  const pA = src ? (link.team === 'home' ? src.homeProbability : src.awayProbability) : null;
+  const pLowA = src?.band ? (link.team === 'home' ? src.band.low : 1 - src.band.high) : null;
+  const pLowB = src?.band ? (link.team === 'home' ? 1 - src.band.high : src.band.low) : null;
+  const okBook = b && !b.error;
+  const why = b?.error ? `Price unavailable: ${b.error}` : 'Loading price…';
+  const fillA = okBook ? executableFill(b, 'YES', state.settings.stake) : { ok: false, reason: why };
+  const fillB = okBook ? executableFill(b, 'NO', state.settings.stake) : { ok: false, reason: why };
+  const teamA = link.team === 'home' ? g.home.abbr : g.away.abbr, teamB = link.team === 'home' ? g.away.abbr : g.home.abbr;
+  const A = sideResult(sideA, teamA, pA, pLowA, fillA, b, kind), B = sideResult(sideB, teamB, pA === null ? null : 1 - pA, pLowB, fillB, b, kind);
+  maybeAlert(m, g, { ...link, label: teamA }, pA, A.ev); maybeAlert(m, g, { ...link, label: teamB }, pA === null ? null : 1 - pA, B.ev);
+  const edgeA = fillA.ok && Number.isFinite(pA) ? pA - fillA.avgPrice : -1, edgeB = fillB.ok && Number.isFinite(pA) ? (1 - pA) - fillB.avgPrice : -1;
+  const when = g.status === 'in' ? `LIVE · ${esc(g.statusText)}` : g.status === 'post' ? 'FINAL' : new Date(g.startTime).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const html = `<div class="panel opp"><div class="panel-head"><div><div class="panel-title">${esc(g.away.abbr)} at ${esc(g.home.abbr)}</div><span class="panel-sub">${when} · ${link.by === 'auto' ? 'matched automatically' : 'matched by you'} · price ${okBook && b.quoteTime ? esc(ago(b.quoteTime)) : '—'}</span></div><button class="sm-btn" data-book="${esc(m.slug)}" aria-label="Refresh price">↻</button></div><div class="panel-pad sides two-up">${A.html}${B.html}</div></div>`;
+  return { html, edge: Math.max(edgeA, edgeB), status: g.status };
 }
 function renderOpportunities() {
-  const ms = flatMarkets().filter(m => /MONEYLINE|UNKNOWN/i.test(m.type) || !m.type);
+  const ms = flatMarkets().filter(m => /MONEYLINE/i.test(m.type || ''));
+  const rows = ms.map(m => ({ m, row: boardRow(m) }));
+  const matched = rows.filter(x => x.row).sort((a, b) => (ORDER[a.row.status] ?? 3) - (ORDER[b.row.status] ?? 3) || b.row.edge - a.row.edge);
+  const unmatched = rows.filter(x => !x.row);
   const others = flatMarkets().length - ms.length;
-  return `${sectionHeader('Compare with Polymarket', 'Our chance vs the market price. If our chance is clearly higher than the price, that could be value.', `<span class="badge orange">TESTING</span>`)}${help(['<b>How to read a price</b>: 45¢ means Polymarket thinks it\'s about a 45% chance. A $5 bet at 45¢ pays back about $11.11 if it wins.', '<b>Difference</b>: our chance minus Polymarket\'s. A positive number means we think the team is more likely to win than the price says.', '<b>Steps</b>: confirm which game it is and which team Polymarket lists first, then tap Check price. We usually pre-fill this for you.', '<b>Verdict</b>: "Worth a look" only if every safety check passes. Otherwise you\'ll see "Not a bet" with the exact reasons.', 'Right now everything shows "Not a bet" because the model is still in testing. That\'s on purpose.'])}
-  <div class="stats-grid">${statCard('GAMES LISTED', currentEvents().length, 'On Polymarket', '', '▧')}${statCard('WHO-WINS MARKETS', ms.length, `${others} other kinds listed`, '', '▥')}${statCard('MATCHED BY YOU', Object.keys(state.links).length, 'Markets linked to games', '', '⇄')}${statCard('WORTH A LOOK', 0, 'None while in testing', 'orange', '⊘')}</div>
-  <div class="notice" style="margin-top:16px"><strong>To be "worth a look", all of these must be true:</strong> the price is fresh, the market is open, your ${dollar(state.settings.stake)} pays ${state.settings.min}×–${state.settings.max}×, expected profit is at least ${state.settings.minEV}% even if we're a bit off, fees are set, injuries are known, and the model has passed paper trading.</div>
-  <div class="stack">${ms.length ? ms.slice(0, 30).map(opportunityCard).join('') : `<div class="panel panel-pad">${marketRows(0)}</div>`}</div>
-  ${others ? `${sectionHeader('Other markets', 'Spreads, totals and player props. We don\'t have picks for these yet, so they are listed only.')}<div class="panel panel-pad">${marketRows(50)}</div>` : ''}`;
+  const priced = matched.filter(x => { const b = state.books[x.m.slug]; return b && !b.error; }).length;
+  return `${sectionHeader('Compare with Polymarket', 'Every game matched and priced automatically. Biggest disagreements first.')}${help(['<b>Our chance</b>: what our model thinks. <b>Polymarket price</b>: 45¢ means the market thinks about 45%.', '<b>Difference</b>: our chance minus the market\'s. Positive means we like that team more than the price does.', '<b>Verdict</b> turns to "Worth a look" only when every safety check passes. Tap "Why not" to see what is missing.', 'Prices refresh with the page. Tap ↻ on a game for the newest price.'])}
+  <div class="stats-grid">${statCard('GAMES MATCHED', matched.length, `${unmatched.length} not matched`, '', '⇄')}${statCard('PRICES LOADED', priced, `For ${dollar(state.settings.stake)} bets`, '', '▥')}${statCard('OTHER MARKETS', others, 'Spreads, totals, props', '', '▧')}${statCard('WORTH A LOOK', matched.filter(x => /WORTH A LOOK/.test(x.row.html)).length, 'All safety checks passed', '', '✓')}</div>
+  <div class="stack">${matched.length ? matched.map(x => x.row.html).join('') : emptyBlock(state.loading ? 'Loading…' : 'No games matched yet', 'Polymarket lists games a day or two ahead. Once ESPN and Polymarket both show a game, it appears here automatically.')}</div>
+  ${unmatched.length ? `${sectionHeader('Not matched', 'We could not tie these to an ESPN game with certainty, so we leave them alone rather than guess.')}<div class="panel panel-pad"><div class="data-list">${unmatched.map(x => `<div class="data-row"><div><strong>${esc(x.m.eventName)}</strong><small>${esc(x.m.slug)}</small></div></div>`).join('')}</div></div>` : ''}`;
 }
 
 function renderParlays() {
   let result = null; try { result = calculateIndependentParlay(state.legs); } catch { }
-  return `${sectionHeader('Parlay calculator', 'Try out parlay ideas with your own numbers.', `<span class="badge orange">PRACTICE ONLY</span>`)}${help(['Add each pick with <b>your chance it wins</b> and <b>what it pays</b> (2× means $5 pays back $10).', 'The calculator shows what the whole parlay pays and its chance to hit.', 'Warning: picks from the same game often win or lose together, so the real chance can be quite different from what this shows.'])}
+  return `${sectionHeader('Parlay calculator', 'Try out parlay ideas with your own numbers.', `<span class="badge">CALCULATOR</span>`)}${help(['Add each pick with <b>your chance it wins</b> and <b>what it pays</b> (2× means $5 pays back $10).', 'The calculator shows what the whole parlay pays and its chance to hit.', 'Warning: picks from the same game often win or lose together, so the real chance can be quite different from what this shows.'])}
   <div class="two-up"><div class="panel"><div class="panel-head"><div class="panel-title">Your picks <span class="panel-sub">Use your own numbers</span></div><span class="badge">${state.legs.length} PICKS</span></div><div class="panel-pad"><div class="data-list">${state.legs.map((l, i) => `<div class="data-row"><div style="flex:1"><strong>${esc(l.label)}</strong><small>Pick ${i + 1}</small></div><div class="row-actions"><span class="tag">${pct(l.p)} chance</span><span class="tag">pays ${l.multiplier.toFixed(2)}×</span><button class="sm-btn" data-remove-leg="${l.id}" aria-label="Remove pick ${i + 1}">×</button></div></div>`).join('')}</div>
     <form id="addLegForm" class="form-grid" style="margin-top:16px"><div class="field"><label for="legLabel">Pick</label><input id="legLabel" name="label" required placeholder="e.g. Team A moneyline" maxlength="80" /></div><div class="field"><label for="legP">Your chance it wins (%)</label><input id="legP" name="p" type="number" required min="1" max="99" step="0.1" placeholder="e.g. 62" /></div><div class="field"><label for="legMult">Pays (×)</label><input id="legMult" name="multiplier" type="number" required min="1.01" max="100" step="0.01" placeholder="e.g. 1.8" /></div><div class="field" style="align-self:end"><button type="submit" class="primary-btn">Add pick +</button></div></form></div></div>
     <div class="stack"><div class="panel"><div class="panel-head"><div class="panel-title">Result</div><span class="badge orange">ESTIMATE</span></div><div class="panel-pad">${result ? `<div class="stat-title">PARLAY PAYS</div><div class="big-number orange-text">${result.grossMultiplier.toFixed(2)}×</div><div class="line"></div><div class="result-line"><span>Chance all picks hit</span><strong>${pct(result.jointP, 2)}</strong></div><div class="result-line"><span>Expected profit before fees</span><strong class="${result.grossEV >= 0 ? 'good-text' : 'error-text'}">${pct(result.grossEV)}</strong></div><div class="result-line"><span>${dollar(state.settings.stake)} pays back if it hits</span><strong>${dollar(state.settings.stake * result.grossMultiplier)}</strong></div><div class="result-line"><span>In your ${state.settings.min}×–${state.settings.max}× target?</span><span class="badge ${result.grossMultiplier >= state.settings.min && result.grossMultiplier <= state.settings.max ? 'green' : 'orange'}">${result.grossMultiplier >= state.settings.min && result.grossMultiplier <= state.settings.max ? 'YES' : 'NO'}</span></div>` : 'Add at least two picks.'}
@@ -344,7 +364,7 @@ function renderSettings() {
       <div class="field" style="grid-column:1/-1"><label class="check"><input type="checkbox" name="feeVerified" ${s.feeVerified ? 'checked' : ''}/> I checked this fee on Polymarket's website</label></div></div></div></div>
       <div class="field" style="margin-top:14px;max-width:240px"><button class="primary-btn" type="submit">Save settings</button></div></form>
     <div class="two-up" style="margin-top:16px"><div class="panel"><div class="panel-head"><div class="panel-title">Alerts while the app is open</div><span class="badge green">WORKING</span></div><div class="panel-pad">
-      <div class="result-line"><span>"Worth a look" alerts</span><span class="badge orange">ON · NONE WHILE TESTING</span></div>
+      <div class="result-line"><span>"Worth a look" alerts</span><span class="badge green">ON</span></div>
       <div class="result-line"><span>Game alerts (comebacks, big swings)</span><button class="sm-btn" data-toggle="researchWatch">${s.researchWatch ? 'ON' : 'OFF'}</button></div>
       <div class="result-line"><span>Sound</span><button class="sm-btn" data-toggle="sound">${s.sound ? 'ON' : 'OFF'}</button></div>
       <div class="result-line"><span>Phone notifications</span><button class="sm-btn" data-test-notification="true">Send a test</button></div>
@@ -393,25 +413,57 @@ async function fetchAPI(path) { const res = await fetch(path, { cache: 'no-store
 async function refresh() {
   if (isDemo()) {
     state.scores = { ok: true, league: 'nba', games: state.sport === 'nba' ? DEMO_GAMES : [], fetchedAt: new Date().toISOString() }; state.markets = { ok: true, events: state.sport === 'nba' ? DEMO_EVENTS : [], fetchedAt: new Date().toISOString() };
-    state.scoresError = null; state.marketsError = null; state.loading = false; state.lastRefresh = new Date().toISOString(); predictAll(); render(); return;
+    state.scoresError = null; state.marketsError = null; state.loading = false; state.lastRefresh = new Date().toISOString(); predictAll(); autoMatchAll(); for (const m of flatMarkets()) if (!state.books[m.slug]) demoBook(m.slug); render(); return;
   }
   state.loading = !state.scores; state.scoresError = null; state.marketsError = null; render();
-  const [scores, markets] = await Promise.allSettled([fetchAPI(`/api/scores?league=${state.sport}`), fetchAPI(`/api/markets?league=${state.sport}`)]);
+  const today = etISO(0), tomorrow = etISO(1);
+  const [scores, sToday, sTomorrow, markets] = await Promise.allSettled([fetchAPI(`/api/scores?league=${state.sport}`), fetchAPI(`/api/scores?league=${state.sport}&date=${ymd(today)}`), fetchAPI(`/api/scores?league=${state.sport}&date=${ymd(tomorrow)}`), fetchAPI(`/api/markets?league=${state.sport}`)]);
   if (isDemo()) return; // user switched mode mid-flight: never mix live into demo
-  state.scores = scores.status === 'fulfilled' ? scores.value : null;
+  const okLists = [scores, sToday, sTomorrow].filter(x => x.status === 'fulfilled').map(x => x.value);
+  state.scores = okLists.length ? { ...okLists[0], games: mergeGames(okLists) } : null;
+  if (state.sport === 'nba' && state.predictor && state.caughtUpFor !== today) await catchUp(today);
   state.markets = markets.status === 'fulfilled' ? markets.value : null;
   state.scoresError = scores.status === 'rejected' ? scores.reason.message : null;
   state.marketsError = markets.status === 'rejected' ? markets.reason.message : null;
   state.loading = false; state.lastRefresh = new Date().toISOString();
-  predictAll(); researchWatch(); render();
+  predictAll(); autoMatchAll(); researchWatch(); render();
+  refreshBooks();
+}
+/** Apply finished games since the rating snapshot (up to 7 days back) so picks stay current. */
+async function catchUp(today) {
+  const from = state.predictor.ratingsAsOf; if (!from) return;
+  const dates = [];
+  for (let d = 1; d <= 7; d++) { const iso = etISO(-d); if (iso > from) dates.push(iso); }
+  const lists = await Promise.allSettled(dates.map(d => fetchAPI(`/api/scores?league=nba&date=${ymd(d)}`)));
+  const games = lists.filter(x => x.status === 'fulfilled').flatMap(x => x.value.games);
+  const n = state.predictor.applyResults(games, today);
+  if (lists.every(x => x.status === 'fulfilled')) state.caughtUpFor = today;
+  if (n) state.preds = {};
+}
+function autoMatchAll() {
+  const games = currentGames();
+  state.autoLinks = {};
+  for (const ev of currentEvents()) for (const m of (ev.markets || [])) {
+    if (!/MONEYLINE/i.test(m.type || '')) continue;
+    const l = matchMarket(m, ev, games); if (l) state.autoLinks[m.slug] = l;
+  }
+}
+let booksBusy = false;
+/** Fetch order books for matched markets of games not yet final, one at a time (polite). */
+async function refreshBooks() {
+  if (booksBusy || isDemo()) return; booksBusy = true;
+  try {
+    const slugs = flatMarkets().filter(m => { const l = linkFor(m); const g = l && currentGames().find(x => x.id === l.gameId); return g && g.status !== 'post'; }).map(m => m.slug).slice(0, 20);
+    for (const slug of slugs) {
+      try { state.books[slug] = await fetchAPI(`/api/book?slug=${encodeURIComponent(slug)}`); } catch (e) { state.books[slug] = { error: e.message }; }
+    }
+    render();
+  } finally { booksBusy = false; }
 }
 function nav(page) { if (!PAGE_NAMES[page]) return; state.page = page; history.replaceState(null, '', `#${page}`); render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+function demoBook(slug) { const ask = slug.includes('2') ? 0.24 : 0.29; state.books[slug] = { ok: true, synthetic: true, state: 'MARKET_STATE_OPEN', open: true, quoteTime: new Date().toISOString(), bestAsk: ask, bestBid: ask - 0.02, offers: [{ px: ask, qty: 40 }, { px: ask + 0.02, qty: 200 }], bids: [{ px: ask - 0.02, qty: 50 }] }; }
 async function getBook(slug) {
-  if (isDemo()) {
-    const ask = slug.includes('2') ? 0.24 : 0.29;
-    state.books[slug] = { ok: true, synthetic: true, state: 'MARKET_STATE_OPEN', open: true, quoteTime: new Date().toISOString(), bestAsk: ask, bestBid: ask - 0.02, offers: [{ px: ask, qty: 40 }, { px: ask + 0.02, qty: 200 }], bids: [{ px: ask - 0.02, qty: 50 }] };
-    render(); toast('Demo price. Not real.'); return;
-  }
+  if (isDemo()) { demoBook(slug); render(); toast('Demo price. Not real.'); return; }
   toast('Fetching the current order book…');
   try { state.books[slug] = await fetchAPI(`/api/book?slug=${encodeURIComponent(slug)}`); render(); }
   catch (e) { state.books[slug] = { error: e.message }; render(); toast(`Order book unavailable: ${e.message}`); }

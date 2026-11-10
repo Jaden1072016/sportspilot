@@ -207,3 +207,15 @@ test('http: non-JSON and 404 fail closed without retries on 4xx', async () => {
   assert.equal(calls, 1);
   await assert.rejects(fetchJSON('https://example.test/c', { fetchImpl: async () => jsonRes(200, {}, { 'content-type': 'text/html' }) }), /non-JSON/);
 });
+
+test('predictor: catch-up applies only completed games before the cutoff date, once', () => {
+  const p2 = createPredictor(pregameModel, liveModel);
+  const asOf = p2.ratingsAsOf;
+  const next = new Date(Date.parse(asOf) + 86400000 * 1.5).toISOString();
+  const fin = { ...mkGame(), id: 'x1', status: 'post', completed: true, startTime: next, home: { ...mkGame().home, score: 120 }, away: { ...mkGame().away, score: 90 } };
+  const cutoff = new Date(Date.parse(asOf) + 86400000 * 3).toISOString().slice(0, 10);
+  assert.equal(p2.applyResults([fin], asOf), 0, 'same-day cutoff blocks');
+  assert.equal(p2.applyResults([fin], cutoff), 1);
+  assert.equal(p2.applyResults([fin], cutoff), 0, 'not applied twice');
+  assert.ok(p2.ratingsAsOf > asOf);
+});
