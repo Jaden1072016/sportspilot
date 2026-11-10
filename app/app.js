@@ -587,7 +587,7 @@ async function refreshBooks() {
     render();
   } finally { booksBusy = false; }
 }
-function nav(page) { if (!PAGE_NAMES[page]) return; state.page = page; history.replaceState(null, '', `#${page}`); render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+function nav(page) { if (!PAGE_NAMES[page]) return; state.page = page; if (location.hash !== `#${page}`) history.pushState(null, '', `#${page}`); render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
 function demoBook(slug) { const ask = slug.includes('2') ? 0.24 : 0.29; state.books[slug] = { ok: true, synthetic: true, state: 'MARKET_STATE_OPEN', open: true, quoteTime: new Date().toISOString(), bestAsk: ask, bestBid: ask - 0.02, offers: [{ px: ask, qty: 40 }, { px: ask + 0.02, qty: 200 }], bids: [{ px: ask - 0.02, qty: 50 }] }; }
 async function getBook(slug) {
   if (isDemo()) { demoBook(slug); render(); toast('Demo price. Not real.'); return; }
@@ -667,6 +667,8 @@ window.addEventListener('online', () => { state.online = true; refresh(); });
 window.addEventListener('offline', () => { state.online = false; render(); });
 $('refreshBtn').addEventListener('click', () => refresh()); $('settingsQuick').addEventListener('click', () => nav('settings'));
 const hash = location.hash.replace('#', ''); if (PAGE_NAMES[hash]) state.page = hash;
+const syncFromHash = () => { const h = location.hash.replace('#', ''); if (PAGE_NAMES[h] && h !== state.page) { state.page = h; render(); window.scrollTo({ top: 0 }); } };
+window.addEventListener('hashchange', syncFromHash); window.addEventListener('popstate', syncFromHash);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('/sw.js').catch(() => { });
 render();
 loadModels().then(refresh).then(() => { if (!isDemo()) pushInit().then(render); });
