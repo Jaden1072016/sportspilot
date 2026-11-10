@@ -1,6 +1,6 @@
 # NBA pregame model: walk-forward validation
 
-Generated 2026-11-10T15:24:12.338Z by `app/scripts/nba/train-pregame.mjs`. Data snapshot built 2026-11-10T15:24:08Z, last game 2026-11-09.
+Generated 2026-11-10T18:44:07.772Z by `app/scripts/nba/train-pregame.mjs`. Data snapshot built 2026-11-10T18:44:04Z, last game 2026-11-09.
 
 **Method.** For each test season S, every model is fit only on seasons 2010..S-1 and evaluated on S. Team ratings are updated game by game using results available before tip-off. The ESPN-published sportsbook spread is shown as a **comparison baseline only**; it is never a model input.
 
