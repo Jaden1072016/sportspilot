@@ -1,47 +1,47 @@
 # NBA pregame model: walk-forward validation
 
-Generated 2026-11-22T18:35:37.633Z by `app/scripts/nba/train-pregame.mjs`. Data snapshot built 2026-11-22T18:35:33Z, last game 2026-11-21.
+Generated 2026-11-23T22:45:59.995Z by `app/scripts/nba/train-pregame.mjs`. Data snapshot built 2026-11-23T22:45:55Z, last game 2026-11-22.
 
 **Method.** For each test season S, every model is fit only on seasons 2010..S-1 and evaluated on S. Team ratings are updated game by game using results available before tip-off. The ESPN-published sportsbook spread is shown as a **comparison baseline only**; it is never a model input.
 
 Rating hyperparameters tuned on 2010-2016 only: k=0.035, carry=0.65, cap=24. Margin RMSE on tuning seasons 11.93 pts.
 
-## All test games (2019-2027, n=10466)
+## All test games (2019-2027, n=10473)
+
+| Model | Brier | Log loss | Accuracy | ECE |
+|---|---|---|---|---|
+| Home-court only (constant) | 0.2475 | 0.6882 | 0.557 | 0.0278 |
+| Win-percentage (legacy v0.1 input) | 0.2236 | 0.6380 | 0.635 | 0.0301 |
+| Margin rating only | 0.2172 | 0.6236 | 0.652 | 0.0061 |
+| NBA-PREGAME-v1.0 base | 0.2166 | 0.6226 | 0.654 | 0.0151 |
+
+## Same games, where an ESPN market line exists (n=10466)
 
 | Model | Brier | Log loss | Accuracy | ECE |
 |---|---|---|---|---|
 | Home-court only (constant) | 0.2475 | 0.6882 | 0.557 | 0.0279 |
-| Win-percentage (legacy v0.1 input) | 0.2236 | 0.6381 | 0.635 | 0.0303 |
-| Margin rating only | 0.2171 | 0.6235 | 0.652 | 0.0063 |
-| NBA-PREGAME-v1.0 base | 0.2166 | 0.6225 | 0.654 | 0.0149 |
+| Win-percentage (legacy v0.1 input) | 0.2236 | 0.6380 | 0.635 | 0.0303 |
+| Margin rating only | 0.2171 | 0.6235 | 0.652 | 0.0062 |
+| NBA-PREGAME-v1.0 base | 0.2166 | 0.6224 | 0.654 | 0.0149 |
+| Sportsbook spread (comparison only) | 0.2067 | 0.5998 | 0.677 | 0.0115 |
 
-## Same games, where an ESPN market line exists (n=10459)
-
-| Model | Brier | Log loss | Accuracy | ECE |
-|---|---|---|---|---|
-| Home-court only (constant) | 0.2475 | 0.6883 | 0.557 | 0.0280 |
-| Win-percentage (legacy v0.1 input) | 0.2236 | 0.6381 | 0.635 | 0.0304 |
-| Margin rating only | 0.2171 | 0.6234 | 0.652 | 0.0064 |
-| NBA-PREGAME-v1.0 base | 0.2165 | 0.6224 | 0.654 | 0.0148 |
-| Sportsbook spread (comparison only) | 0.2067 | 0.5997 | 0.677 | 0.0116 |
-
-## Lineup-aware variant (lineup-confirmed scenario, n=10465)
+## Lineup-aware variant (lineup-confirmed scenario, n=10472)
 
 Uses who actually played (from the box score) to measure missing rotation value. This is what the model can do **only when a verified inactive list is available before tip**. Late scratches make the live version weaker than this.
 
 | Model | Brier | Log loss | Accuracy | ECE |
 |---|---|---|---|---|
-| Base (no availability) | 0.2166 | 0.6225 | 0.654 | 0.0149 |
-| Lineup-aware | 0.2123 | 0.6123 | 0.663 | 0.0072 |
-| Lineup-aware, market-line games only (n=10458) | 0.2123 | 0.6122 | 0.663 | 0.0071 |
-| Sportsbook spread on same games | 0.2067 | 0.5997 | 0.677 | 0.0116 |
+| Base (no availability) | 0.2166 | 0.6226 | 0.654 | 0.0150 |
+| Lineup-aware | 0.2123 | 0.6124 | 0.663 | 0.0074 |
+| Lineup-aware, market-line games only (n=10465) | 0.2123 | 0.6123 | 0.663 | 0.0073 |
+| Sportsbook spread on same games | 0.2067 | 0.5998 | 0.677 | 0.0116 |
 
 ## Paired bootstrap, log-loss difference (negative = first model better), 95% interval
 
-- Base vs win-percentage baseline: -0.0156 [-0.0203, -0.0109]
-- Base vs rating-only: -0.0010 [-0.0025, 0.0004]
-- Base vs sportsbook line: 0.0227 [0.0186, 0.0269]
-- Lineup-aware vs base: -0.0102 [-0.0132, -0.0074]
+- Base vs win-percentage baseline: -0.0155 [-0.0196, -0.0111]
+- Base vs rating-only: -0.0010 [-0.0023, 0.0003]
+- Base vs sportsbook line: 0.0227 [0.0185, 0.0264]
+- Lineup-aware vs base: -0.0102 [-0.0132, -0.0071]
 
 ## By season (base model vs market line)
 
@@ -55,7 +55,7 @@ Uses who actually played (from the box score) to measure missing rotation value.
 | 2024 | 1319 | 0.2106 | 0.6085 | 0.5842 (1319) |
 | 2025 | 1321 | 0.2102 | 0.6065 | 0.5860 (1321) |
 | 2026 | 1322 | 0.2071 | 0.6021 | 0.5761 (1321) |
-| 2027 | 241 | 0.2111 | 0.6089 | 0.5664 (241) |
+| 2027 | 248 | 0.2133 | 0.6133 | 0.5700 (248) |
 
 ## Calibration of base model (all test games)
 
@@ -63,13 +63,13 @@ Uses who actually played (from the box score) to measure missing rotation value.
 |---|---|---|---|---|
 | 0-10% | 35 | 0.077 | 0.114 | 0.045-0.260 |
 | 10-20% | 311 | 0.161 | 0.164 | 0.127-0.209 |
-| 20-30% | 762 | 0.255 | 0.277 | 0.246-0.310 |
-| 30-40% | 1218 | 0.351 | 0.363 | 0.336-0.390 |
-| 40-50% | 1532 | 0.452 | 0.465 | 0.440-0.490 |
+| 20-30% | 763 | 0.255 | 0.277 | 0.246-0.309 |
+| 30-40% | 1221 | 0.351 | 0.364 | 0.338-0.392 |
+| 40-50% | 1534 | 0.452 | 0.465 | 0.440-0.490 |
 | 50-60% | 1956 | 0.551 | 0.556 | 0.534-0.578 |
 | 60-70% | 1888 | 0.648 | 0.634 | 0.612-0.655 |
 | 70-80% | 1605 | 0.748 | 0.730 | 0.708-0.751 |
-| 80-90% | 986 | 0.843 | 0.809 | 0.784-0.833 |
+| 80-90% | 987 | 0.843 | 0.810 | 0.784-0.833 |
 | 90-100% | 173 | 0.923 | 0.884 | 0.828-0.924 |
 
 ## Calibration of lineup-aware model
@@ -78,12 +78,12 @@ Uses who actually played (from the box score) to measure missing rotation value.
 |---|---|---|---|---|
 | 0-10% | 34 | 0.077 | 0.029 | 0.005-0.149 |
 | 10-20% | 311 | 0.161 | 0.132 | 0.099-0.174 |
-| 20-30% | 709 | 0.254 | 0.254 | 0.223-0.287 |
-| 30-40% | 1251 | 0.355 | 0.355 | 0.329-0.382 |
-| 40-50% | 1623 | 0.451 | 0.458 | 0.434-0.482 |
+| 20-30% | 710 | 0.254 | 0.254 | 0.223-0.287 |
+| 30-40% | 1254 | 0.355 | 0.356 | 0.330-0.383 |
+| 40-50% | 1625 | 0.451 | 0.458 | 0.434-0.482 |
 | 50-60% | 1924 | 0.551 | 0.555 | 0.533-0.577 |
 | 60-70% | 1919 | 0.650 | 0.652 | 0.630-0.673 |
-| 70-80% | 1582 | 0.747 | 0.745 | 0.723-0.766 |
+| 70-80% | 1583 | 0.747 | 0.745 | 0.723-0.766 |
 | 80-90% | 969 | 0.843 | 0.808 | 0.782-0.832 |
 | 90-100% | 143 | 0.923 | 0.958 | 0.911-0.981 |
 
