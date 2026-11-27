@@ -1,6 +1,6 @@
 # NBA player prop projections: held-out validation
 
-Generated 2026-11-26T20:18:07.856Z by `app/scripts/nba/train-props.mjs`. Snapshot built 2026-11-26T20:17:52Z.
+Generated 2026-11-27T20:04:31.578Z by `app/scripts/nba/train-props.mjs`. Snapshot built 2026-11-27T20:04:13Z.
 
 **Method.** Expected minutes and per-minute rates are exponentially weighted from earlier games only, scaled by expected pace and (points only) opponent defense. Counts follow a negative binomial whose spread was fit on 2021-2024 and scored on 2025-2027 (2027 partial). Results are conditional on the player playing. Baselines: "last 10 games" hit rate (what most prop sites show) and a Poisson model with the same average (no extra spread).
 
